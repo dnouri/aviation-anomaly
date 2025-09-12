@@ -1,122 +1,425 @@
-# **Project Specification: Aviation Anomaly Tracker**
+# Aviation Anomaly Tracker — Detailed Specification
 
-## **1. Overview & Vision**
+> Status: **Draft for Dev Handoff**
+> Scope: **Global but shallow** (one multi-month package; Phase‑1 map validated at H3 r4, with r3–r7 prepared)
+> Decision Log: See §1.3
 
-This document outlines the requirements for building an interactive web-based visualization tool to analyze the rate of aviation emergencies over time and space.
+---
 
-The primary goal is to move beyond real-time alerting and provide a strategic tool for identifying geographic hotspots where the *proportion* of flights experiencing an emergency is unusually high. The final product will be an interactive map that is fast, intuitive, and data-rich, allowing users to explore both high-level trends and drill down into specific incident details.
+## 1. Overview & Vision
 
-### **User Stories**
+This document defines the end‑to‑end system that ingests OpenSky state vectors, detects emergency-squawk incidents (7500/7600/7700), aggregates them onto an H3 grid, and renders a performant, drill‑able global hotspot map. The intent is **exploratory analysis**, not operational alerting or safety scoring. All rates reflect **observed** traffic under OpenSky coverage.
 
-* As an aviation analyst, I want to see a map of incident rates so I can identify regions with potential underlying safety or operational issues.
-* As a user, I want to filter the map by time so I can understand how patterns evolve seasonally or in response to events.
-* As a user, I want to zoom into the map to see more granular detail for a specific area.
-* As a user, I want to click on a hotspot to see a list of the specific incidents that occurred there.
+### 1.1 User Stories
 
-## **2. System Architecture**
+- **Analyst** — View a global heatmap of emergency **rates** per hex; filter by month and squawk type; click to inspect counts and context.
+- **Investigator** — Click a hotspot to list included incidents with timestamp, squawk, callsign, registration, and aircraft type.
+- **Developer** — Run reproducible ETL stages with testable SQL and deterministic outputs (manifested, versioned, idempotent).
+- **Product** — Ship a global, responsive map with predictable performance, a clear legend, and honest coverage messaging.
 
-The system is composed of two main parts: an offline data processing pipeline and a web-based frontend. This architecture is designed for performance, simplicity, and maintainability.
+### 1.2 Non‑Goals (v1)
 
-### **2.1. Backend: Data Processing Pipeline**
+- Statistical smoothing (Empirical‑Bayes) — planned for v2.
+- Flight‑aware segmentation using the OpenSky flights archive — planned for v2 (v1.1 uses gap‑based segmentation).
+- Real‑time ingestion/streaming — v1 is batch (monthly).
 
-* **Trigger:** A scheduled batch job (e.g., daily Cron job or Airflow DAG).
-* **Data Source:** OpenSky Network's Trino database (states\_history\_data4 and flights\_data4 tables).
-* **Processing Engine:** A Python script orchestrating **DuckDB** queries. All data transformation will be performed within DuckDB using its native SQL capabilities and the official **H3 extension**. No Pandas or GeoPandas will be used.
-* **Storage Format:** Apache Parquet.
+### 1.3 Decision Log (frozen for v1)
 
-### **2.2. Frontend: Interactive Map**
+- **Denominator**: *Unique flight segments touching a cell per month* (deduped)
+- **Min visibility**: mask cells with **<50 flights/month**
+- **Incident categories**: show **aggregate** and offer **per‑type filters** (7500/7600/7700)
+- **Incident debounce** (type-specific within same segment): **15 minutes**
+- **Include aircraft type** (via OpenSky aircraft DB; nulls allowed)
+- **Tiles**: **PMTiles** packaging for MVT, multi‑month per resolution
+- **Zoom→H3**: z4–5→r3; z6–7→r4; z8–9→r5; z10–11→r6; z12+→r7
+- **Error handling**: **fail fast** on pipeline errors (no retries in v1)
+- **Phase‑1 map**: **global**, one multi‑month PMTiles, **r4** baseline; r3–r7 generated for future zooms
+- **Coverage note**: **Mixed rule** (points/flight & flights thresholds)
+- **Identifiers in drill‑down**: **callsign + registration** when available
 
-* **Framework:** **HTMX** for server-driven interactivity and **pure JavaScript** for client-side enhancements. No complex build scripts, transpilation, or frontend frameworks (React, Vue, etc.) are required.
-* **Mapping Library:** A library capable of handling vector tiles and WebGL rendering for performance (e.g., Mapbox GL JS, Deck.gl).
-* **Hexagonal Grid:** Uber's H3 library will be used for all geographic grid logic, accessed via the DuckDB extension in the backend.
+---
 
-## **3. Data Processing Pipeline (ETL)**
+## 2. Functional Requirements
 
-This pipeline is a **two-stage process** to isolate expensive queries from iterative data transformation.
+### 2.1 Core Flows
 
-### **3.1. Staged Execution & Caching**
+1) **Ingest & cache** OpenSky states history into monthly Parquet partitions.
+2) **Transform** into flight segments (v1.1 gap‑based), detect & debounce incidents.
+3) **Aggregate to H3** per month/resolution with counts, rates, and summary attributes.
+4) **Package as PMTiles** (MVT) per resolution with **multi‑month** attribute.
+5) **Render map** with a hybrid color scale; expose filters and drill‑downs.
 
-* **Stage 1 (Extraction):** A dedicated script to query raw data from Trino for a specified date range and save it directly to a local Parquet cache. This is the only stage that communicates with OpenSky.
-* **Stage 2 (Transformation):** A separate script that reads exclusively from the local raw Parquet cache. It uses DuckDB to perform all transformations (incident grouping, H3 calculations, normalization). This stage can be re-run frequently without network cost.
+### 2.2 Filters & Controls
 
-### **3.2. Stage 1: Raw Data Extraction & Caching**
+- Month picker (single month at a time; time slider optional if needed).
+- Squawk selector: **All / 7500 / 7600 / 7700**.
+- Resolution lock (toggle advanced) to hold the H3 res across zoom.
+- AOI search (fly‑to), optional.
+- Reset filters.
 
-* The script will accept a start and end date range.
-* It will query the opensky.states\_history\_data4 table for all state vectors within this range.
-* The raw, unprocessed results will be saved directly to monthly Parquet files.
+### 2.3 Outputs
 
-### **3.3. Stage 2: Transformation & Aggregation (DuckDB Only)**
+- Interactive map (WebGL) with informative legend & tooltips.
+- Drill‑down table per **(month, h3_index, resolution, filter)**.
+- Download CSV for the drill‑down table (guarded by size).
 
-* This stage reads data **only from the raw Parquet cache** using DuckDB.
-* **Incident Definition:** A SQL query will filter for emergency squawks (7700, 7600, 7500\) and group them into unique incidents. A single "incident" is defined by grouping squawks from the same icao24 within a **configurable 3-hour window**.
-* **Enrichment:** Each unique incident is enriched with flight details by joining with the opensky.flights\_data4 table.
-* **H3 Grid Calculation:** DuckDB's H3 extension functions (h3\_latlng\_to\_cell) will be used to calculate H3 cell indexes for each incident and flight path at multiple resolutions (e.g., 1 through 7).
-* **Aggregation:** A final SQL query will calculate the incident counts and total flight counts for every H3 cell at each resolution level.
+---
 
-### **3.4. Data Storage**
+## 3. Data Sources & Schemas
 
-* **Raw Data Cache (Stage 1 Output):** Stores direct results from Trino.
-  * **File Path:** /data/raw\_states/{YYYYMM}.parquet.
-* **Processed Aggregates (Stage 2 Output):** Stores frontend-ready data.
-  * **File Path:** /data/h3\_aggregates/{YYYYMM}-{resolution}.parquet.
+### 3.1 OpenSky States History (via Trino)
 
-## **4. Frontend & User Experience**
+- **Table**: `opensky.states_history_data4` (or successor)
+- **Required fields**: `time` (unix s), `icao24`, `callsign` (nullable), `lat`, `lon`, `baro_altitude` (nullable), `geo_altitude` (nullable), `velocity` (nullable), `heading` (nullable), `vertrate` (nullable), `squawk` (nullable), plus quality flags where available.
+- **Query window**: calendar months (UTC).
+- **Access**: batch SQL via pyopensky's Trino connection with OAuth authentication; no API calls in Stage‑2+.
+- **Implementation**: Uses pyopensky library (≥2.0) for connection management and authentication.
 
-### **4.1. Map Visualization**
+### 3.2 OpenSky Aircraft Registry
 
-* The map displays a hexagonal grid colored by the **Normalized Incident Rate**.
-* **Rate Calculation:** (COUNT(Incidents in Hex) / COUNT(Total Flights in Hex)) \* 100,000.
-* **Color Scale:** A perceptually uniform color scale (e.g., Blue \-\> Yellow \-\> Red).
-* **"No Data" Color:** Hexagons with Total Flights \= 0 are rendered in a distinct, neutral color (e.g., light gray).
+- **Format**: CSV snapshot or table; left‑join on `icao24` (string/hex).
+- **Fields used**: `typecode` (ICAO Doc 8643), `model`, `manufacturer`, `registration`, `owner` (if present; not displayed).
+- **Notes**: coverage is incomplete; expect nulls and stale rows.
 
-### **4.2. Interactivity**
+### 3.3 Derived Concepts
 
-* **Dynamic Resolution:** The H3 grid resolution automatically updates based on the map's zoom level.
-* **Time Slider:** A slider allows users to select a month/year. The map updates by querying the relevant monthly Parquet files.
-* **Drill-Down:** Clicking a hexagon opens a sortable table of incidents.
-  * **Columns:** Date, Time (UTC), Callsign, Aircraft Type, Origin, Destination, Squawk Code.
+- **Squawk type**: map `7500`→unlawful interference, `7600`→lost comms, `7700`→general emergency.
+- **Great‑circle distance**: WGS‑84 haversine for interpolation & segment length checks.
 
-## **5. Error Handling Strategy**
+---
 
-The system will **fail fast and hard**. Errors in the data pipeline must terminate the process and alert a human.
+## 4. ETL Pipeline (Batch)
 
-* **Pipeline Failures:** The ETL script MUST terminate and raise an explicit exception if:
-  * Connection to OpenSky Trino fails.
-  * OpenSky returns an empty or malformed dataset.
-  * Writing a Parquet file fails.
-  * A DuckDB query fails.
-* **Frontend Errors:** Gracefully handle missing Parquet files with a user-friendly message.
+> All stages are **idempotent**. Each write includes a **MANIFEST.toml** with `{data_version, code_version, source_range, row_counts, checksum}`. Storage uses local filesystem for v1.
 
-## **6. Testing Plan**
+### 4.1 Stage‑1 Extraction (Raw Cache)
 
-### **6.1. Guiding Principles**
+**Purpose**: Pull states into **monthly** Parquet partitions on local filesystem.
+**Inputs**: `year, month` (UTC).
+**Columns**: only required fields (§3.1) to reduce size.
+**Chunking**: request by **day**, unioned into the month.
+**Output path**: `data/raw/year=YYYY/month=MM/part-*.parquet` + MANIFEST.toml.
 
-* **Test-Driven Development (TDD):** All data transformation logic, which lives in SQL, must be designed and built using a test-first approach.
-* **Clean Code:** Both the orchestrating Python code and the SQL queries must be simple, readable, and maintainable.
+**Guards**
+- Reject rows with `lat/lon` null.
+- Drop obviously invalid positions (|lat|>90, |lon|>180).
+- Enforce monotonic `time` type.
+- **Fail fast** on Trino error or schema change; no retries in v1.
 
-### **6.2. The TDD Cycle for SQL Logic (Red-Green-Refactor)**
+### 4.2 Stage‑2 Transformation (Segments & Incidents)
 
-The development of DuckDB queries must follow this cycle:
+**2.2.1 Segment Builder (v1.1)**
+- Partition by `icao24`; order by `time`.
+- Start a segment at first point or when **gap > 20 min**.
+- End segment at the last point before the gap.
+- Discard segments with **duration <10 min AND distance <30 km**.
+- Compute **polyline** via great‑circle **interpolation** at max **10 km** chord or **60 s** time step (whichever finer) to avoid cell skips.
+- Assign `segment_id = hash(icao24, start_time, end_time)`.
 
-1. **Red:** Write a Python test that runs a DuckDB query against a small, hand-crafted Parquet input file. Assert the expected outcome. This test will fail initially because the query is not yet implemented.
-2. **Green:** Write the simplest possible SQL query to make the test pass.
-3. **Refactor:** Improve the SQL for clarity and efficiency without breaking the test. Add a new failing test for another edge case and repeat the cycle.
+**2.2.2 Segment→H3 cells (line cover)**
+- For each segment polyline, compute H3 line‑cover for **r3–r7** using h3-duckdb extension.
+- **Dedup rule**: a segment contributes **at most 1** to the **denominator** per `(cell, month)`.
 
-### **6.3. Clean Code for SQL & Python**
+**2.2.3 Incident Detection & Debounce**
+- On a segment, an **incident** starts when squawk enters {7500, 7600, 7700}; ends when it leaves.
+- **Debounce**: events of the **same type** separated by **<15 min** are merged.
+- Record: `incident_id`, `segment_id`, `icao24`, `type`, `t_start`, `t_end`, `duration_s` (cap at 90 min for stats), `callsign_first`, `registration` (from join), `typecode` (nullable).
+- For H3 aggregation, an incident contributes **1** to each **cell** intersected by the **segment** (not duration‑weighted in v1).
 
-* **SQL Readability:** Complex queries must be broken into logical steps using **Common Table Expressions (CTEs)** with descriptive names. The logic should be stored in well-commented .sql files.
-* **Python Orchestration:** The Python scripts should act as simple orchestrators. Their role is to execute the .sql files with the correct parameters (input/output paths, dates) and handle errors. They should not contain complex data manipulation logic.
+**2.2.4 Aircraft Enrichment (left‑join)**
+- Join aircraft CSV on `icao24` to add `typecode`, `model`, `manufacturer`, `registration`.
+- Keep original keys for lineage; allow nulls.
 
-### **6.4. Specific Test Cases (Unit & Integration)**
+**Outputs**
+- `data/curated/segments/year=YYYY/month=MM/segments.parquet`
+- `data/curated/incidents/year=YYYY/month=MM/incidents.parquet`
 
-* **Incident Grouping:** Verify that mock state vectors are correctly grouped into a single incident, especially across the 3-hour window boundary.
-* **H3 Calculation:** Confirm a lat/lon coordinate is assigned to the correct H3 cell ID.
-* **Rate Normalization:** Ensure the final rate calculation is accurate given a known set of inputs.
-* **End-to-End Pipeline:** An integration test using a small, local dataset to run the full pipeline from raw cache to final H3 aggregate.
-* **Frontend Integration:** A test to ensure the frontend can load a sample aggregate Parquet file and render data.
+### 4.3 Stage‑3 Aggregation (Per Month & Resolution)
 
-### **6.5. Phased Rollout Plan**
+For each month and each H3 **resolution r ∈ {3..7}**:
 
-1. **Phase 1 (Walking Skeleton):** Implement the full data pipeline for a single month and a single, fixed H3 resolution. The frontend will be a static map.
-2. **Phase 2 (Interactivity):** Implement the time slider.
-3. **Phase 3 (Dynamic Grid):** Implement the dynamic zoom-level loading.
+- `flights` = **number of unique `segment_id`** that touched the cell (deduped).
+- `incidents_*` = counts of incidents touching the cell (aggregate and per type).
+- `rate_all_ppm` = `incidents_all / flights * 1_000_000` (if `flights`>0, else null).
+- `points_per_flight_median` = median **raw** points per (`segment_id`, cell) for coverage.
+- `top_aircraft_typecode` = mode of incident‑carrying segments’ `typecode` (ties broken by frequency then lexicographically).
+- `coverage_note` = **Good** if `points_per_flight_median≥4 && flights≥100`; **Partial** otherwise; **Mask** if `flights<50`.
+
+**Output**
+- `/aggregates/res=r{r}/aggregates_YYYYMM.parquet` (+ MANIFEST.toml)
+
+### 4.4 Stage‑4 Tile Build (PMTiles/MVT)
+
+**Pipeline**: DuckDB exports H3 hexagons to GeoJSON → Tippecanoe generates PMTiles.
+**Packaging**: One **PMTiles** per **resolution** containing **multiple months**; each feature carries `month` as an attribute.
+
+**Layer name**: `hotspots_r{r}`.
+**Feature**: one polygon per H3 cell.
+**Attributes** (minimal + summaries):
+```
+month (YYYY-MM)
+h3_res (int)
+h3_index (string)      # base16
+flights (int)
+incidents_all (int)
+incidents_7500 (int)
+incidents_7600 (int)
+incidents_7700 (int)
+rate_all_ppm (float)
+top_aircraft_typecode (string|null)
+coverage_note (enum: good|partial|mask)
+```
+**Tile quality**
+- Geometry simplification per zoom to keep tile size reasonable (target: **<200 KB** typical tile).
+- Quantize coordinates; 1–2 decimal digits in attributes where appropriate.
+- Validate attribute presence and types.
+
+**Output**
+- `/tiles/h3_r{r}/hotspots.pmtiles` (with accompanying TileJSON).
+
+---
+
+## 5. Frontend Application
+
+### 5.1 Technology
+
+- Map rendering via **MapLibre GL** with vanilla JavaScript (no build step required).
+- PMTiles source using a PMTiles protocol handler (HTTP range requests).
+- **HTMX** for non‑map UI controls (filters, drill-down interactions).
+- No heavy build chain required; serve static HTML/JS/CSS files.
+
+### 5.2 UX Requirements
+
+- **Legend**: hybrid color scale (fixed base + quantile tail); grey = “Insufficient data (<50 flights)”.
+- **Tooltip (on hover/click)**:
+  - `rate_all_ppm`, `flights`, `incidents_all`, breakdown (7500/7600/7700), `top_aircraft_typecode` (if any), `coverage_note`.
+- **Filters**: month (single), squawk type (All / 7500 / 7600 / 7700).
+- **Resolution control** (advanced): lock to a chosen H3 res.
+- **Drill‑down (side panel)**: table for the selected (month, cell):
+  - `timestamp_start`, `timestamp_end`, `squawk_type`, `icao24`, `callsign`, `registration`, `typecode` (nullable).
+  - Sort by time desc; CSV export; max 200 rows (paginate).
+- **Accessibility**: color‑blind‑safe palette; keyboard focus indicators; descriptive ARIA labels.
+
+### 5.3 Performance Budgets
+
+- Initial map render: **<2.0 s** on a 4G connection (Fast 3G Lighthouse profile acceptable to 3.0 s).
+- Interaction latency (filter change): **<300 ms** to visual update (cached tiles).
+- PMTiles size budgets (indicative): r3 **≤60 MB**, r4 **≤120 MB**, r5 **≤250 MB** per multi‑month package.
+
+### 5.4 Zoom→H3 Mapping (fixed)
+
+- z4–5 → r3 (~40 km edge)
+- z6–7 → r4 (~15 km)
+- z8–9 → r5 (~6 km)
+- z10–11 → r6 (~2.5 km)
+- z12+ → r7 (~1 km)
+
+---
+
+## 6. APIs & File Endpoints
+
+### 6.1 Tile Serving
+
+- GET `/tiles/h3_r{r}/hotspots.pmtiles` — static file on CDN.
+- GET `/tiles/h3_r{r}/tile.json` — TileJSON with attribution, bounds, min/max zoom, layer name, and a list of available `month` values (metadata).
+
+### 6.2 Drill‑Down Data (per cell, per month)
+
+- **Implementation**: Click CLI with embedded FastAPI server.
+- GET `/api/drilldown?month=YYYY-MM&h3_res=r&h3_index=hex&sq=all|7500|7600|7700&limit=200&offset=0`
+**Response**:
+```json
+{
+  "meta": {"month":"2025-05","h3_res":4,"h3_index":"8928308280fffff","count": 132},
+  "rows": [
+    {
+      "timestamp_start":"2025-05-14T12:45:02Z",
+      "timestamp_end":"2025-05-14T12:55:30Z",
+      "squawk_type":"7700",
+      "icao24":"a1b2c3",
+      "callsign":"SAS123 ",
+      "registration":"SE-ABC",
+      "typecode":"A20N"
+    }
+  ]
+}
+```
+- Backed by `data/curated/incidents` parquet; server enforces row caps and projects only needed columns.
+
+---
+
+## 7. Testing & Validation
+
+### 7.1 Unit Tests
+
+- **SQL Testing**: Pure SQL tests using separate .sql files with test harness.
+- **Segment builder**: gap boundaries (19m = same, 20m = new), min duration/distance filters.
+- **Interpolation**: ensures intermediate points prevent H3 skips on long legs.
+- **Line cover**: property‐based tests on synthetic polylines vs known cell sets.
+- **Debounce**: 5/10/15/60‑min scenarios; type‑specific merging only.
+- **Aggregation math**: denominator dedupe; rate calculation; coverage note thresholds.
+
+### 7.2 Integration Tests
+
+- **Test Data**: Real OpenSky samples (48h) for integration tests; synthetic data for edge cases.
+- **Mini month** (48h real sample + synthetic edge cases): run **Stage‑1→4**; compare MANIFEST counts to expectations.
+- **Tile validation**: parse PMTiles, check attribute presence/types, tile count heuristics, and size budgets.
+
+### 7.3 Frontend Tests
+
+- Smoke test loads PMTiles and renders r4 at z6–7; filter toggles update style without network errors.
+- Tooltip & drill‑down snapshot tests; CSV export validates headers and row counts.
+
+### 7.4 Acceptance Criteria
+
+- Map loads globally at r4 with the hybrid legend; switching squawk filter updates counts and colors.
+- Drill‑down returns expected rows for known test cells; IDs and timestamps make sense.
+- Cells with `<50` flights are greyed and excluded from stats.
+- PMTiles metadata lists all months packaged; selecting each month filters the layer.
+
+---
+
+## 8. Operational Considerations
+
+### 8.1 Versioning & Lineage
+
+- Every dataset/tile bundle includes a **MANIFEST.toml** with:
+  `{source_snapshot (start_ts,end_ts), code_version, data_version, created_at, row_counts, checksum (SHA256), config_hash}`.
+- Manifests written atomically (write to temp file, then rename).
+- Folder names are immutable; new runs write to a new `data_version` folder and update a lightweight pointer file `LATEST`.
+
+### 8.2 Configurability (TOML config file)
+
+**Format**: TOML configuration file (`config.toml`) loaded via Python's `tomllib`.
+**CLI**: Click accepts `--config` parameter with default path.
+
+```toml
+[segments]
+segment_gap_minutes = 20
+segment_min_duration_min = 10
+segment_min_distance_km = 30
+
+[incidents]
+debounce_minutes = 15
+
+[aggregation]
+h3_resolutions = [3, 4, 5, 6, 7]
+min_flights_visible = 50
+coverage_good_pts_per_flt = 4
+coverage_good_min_flights = 100
+
+[interpolation]
+interp_max_chord_km = 10
+interp_max_step_s = 60
+```
+- All thresholds are surfaced centrally; changing them increments `data_version`.
+
+### 8.3 Logging
+
+- Structured logs with `stage`, `dataset`, `partition`, `duration_ms`, `row_counts`.
+- **Fail fast**: pipeline aborts on errors (schema mismatch, extraction failure, write errors).
+- Metrics exported as counters/gauges if infra allows; otherwise JSON logs suffice.
+
+### 8.4 Security & Privacy
+
+- Drill‑down exposes **callsign and registration**; document this in UI and T&Cs.
+- Respect OpenSky terms; do not redistribute raw data beyond what is permitted.
+- No PII beyond aircraft identifiers; no user data collected.
+
+---
+
+## 9. Risks & Mitigations
+
+- **Coverage bias**: prominently flagged by `coverage_note`; legend clarifies.
+- **Sparse denominators**: mask `<50` flights; hybrid color scale to avoid misleading extremes.
+- **Tile bloat**: strict attribute set; geometry simplification and quantization; PMTiles packaging.
+- **Operational fragility** (v1): fail‑fast increases rebuilds; v2 can add retries/backoff.
+- **Type join gaps**: show nulls; do not rely on type for filtering logic in v1.
+
+---
+
+## 10. Future Work (v2 Roadmap)
+
+- **Empirical‑Bayes** smoothing with beta‑binomial; show credible intervals in tooltips.
+- **Flight‑aware segmentation** via OpenSky flights archive; phase‑of‑flight inference; airport proximity context.
+- **Retries & backoff**, alerting; incremental rebuilds.
+- **Region‑specific registries** (FAA, CAA) to enrich aircraft type coverage.
+- **Time animation** and deltas vs prior month; per‑type small multiples.
+
+---
+
+## Appendix A — Example SQL/Pseudocode
+
+> The exact SQL dialect may vary; shown here for DuckDB + H3.
+
+**Segment gaps**
+```sql
+-- Per icao24, ordered by time
+WITH s AS (
+  SELECT *,
+         time - LAG(time) OVER (PARTITION BY icao24 ORDER BY time) AS dt
+  FROM states
+),
+flags AS (
+  SELECT *, CASE WHEN dt IS NULL OR dt > 20*60 THEN 1 ELSE 0 END AS new_seg
+  FROM s
+),
+segmented AS (
+  SELECT *, SUM(new_seg) OVER (PARTITION BY icao24 ORDER BY time) AS seg_no
+  FROM flags
+)
+SELECT icao24, MIN(time) AS t_start, MAX(time) AS t_end,
+       array_agg([lat,lon] ORDER BY time) AS path
+FROM segmented
+GROUP BY icao24, seg_no;
+```
+
+**Incident debounce (per segment & type)**
+```sql
+-- Assume rows only when squawk in {7500,7600,7700}, per segment & type
+WITH e AS (
+  SELECT *, time - LAG(time) OVER (PARTITION BY segment_id, squawk_type ORDER BY time) AS dt
+  FROM segment_events
+),
+burst AS (
+  SELECT *, CASE WHEN dt IS NULL OR dt > 15*60 THEN 1 ELSE 0 END AS new_burst
+  FROM e
+)
+SELECT segment_id, squawk_type,
+       MIN(time) AS t_start, MAX(time) AS t_end,
+       COUNT(*) AS frames
+FROM (
+  SELECT *, SUM(new_burst) OVER (PARTITION BY segment_id, squawk_type ORDER BY time) AS burst_id
+  FROM burst
+) b
+GROUP BY segment_id, squawk_type, burst_id;
+```
+
+**Aggregation per H3 cell**
+```sql
+-- flights: unique segments that touch cell; incidents: count bursts touching cell
+SELECT month, h3_res, h3_index,
+       COUNT(DISTINCT segment_id) AS flights,
+       SUM(incidents_all) AS incidents_all,
+       SUM(incidents_7500) AS incidents_7500,
+       SUM(incidents_7600) AS incidents_7600,
+       SUM(incidents_7700) AS incidents_7700,
+       (CASE WHEN COUNT(DISTINCT segment_id) > 0
+             THEN 1e6 * SUM(incidents_all)::DOUBLE / COUNT(DISTINCT segment_id)
+             ELSE NULL END) AS rate_all_ppm
+FROM cell_facts
+GROUP BY month, h3_res, h3_index;
+```
+
+---
+
+## Appendix B — Acceptance Checklist (Dev sign‑off)
+
+- [ ] Stage‑1 writes monthly raw Parquet with manifest; row counts stable.
+- [ ] Stage‑2 segments match gap/duration/distance rules; line‑cover prevents cell skips.
+- [ ] Incidents are debounced at **15 min** within segments & type.
+- [ ] Aggregates honor mask rule `<50` flights; coverage note set per thresholds.
+- [ ] PMTiles per resolution pass size and attribute validations.
+- [ ] Frontend renders r4 globally; tooltips & filters match attributes.
+- [ ] Drill‑down API returns correct rows and enforces limits.
+- [ ] Documentation: legend copy, data disclaimer, API schemas published.
