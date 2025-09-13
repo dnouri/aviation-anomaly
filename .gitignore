@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
+*.pyc
 *$py.class
 *.so
 .Python
@@ -46,6 +47,7 @@ dmypy.json
 .env.*.local
 
 # Data directories
+data/
 data/raw_states/
 data/h3_aggregates/
 data/cache/

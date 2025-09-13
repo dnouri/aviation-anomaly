@@ -64,7 +64,7 @@
 
 ---
 
-## Phase 0: Project Foundation ☐
+## Phase 0: Project Foundation ✅
 
 **Goal**: Establish project structure, configuration system, logging, and test framework.
 
@@ -74,27 +74,27 @@
 
 ### Tasks
 
-- [ ] **Create project structure**
+- [x] **Create project structure**
   - RED: Test that expected directories don't exist (`test_project_structure.py`)
   - GREEN: Create directories: `aviation_anomaly/`, `tests/`, `sql/`, `data/`, `static/`
   - GREEN: Create `__init__.py` files where needed
   - REFACTOR: Add `.gitignore` for data/, *.pyc, etc.
   - Note: This establishes our working environment
 
-- [ ] **Implement TOML configuration loader**
+- [x] **Implement TOML configuration loader**
   - RED: Test config loading fails when file missing
   - RED: Test invalid TOML raises clear error
   - RED: Test missing required fields caught
   - GREEN: Create `Config` class using `tomllib`
   - GREEN: Load from file path with error handling
-  - REFACTOR: Add validation, defaults, type hints
+  - REFACTOR: Add validation, defaults, type hints with dataclasses
   ```python
   # Example config structure to test:
   # [segments]
   # gap_minutes = 20
   ```
 
-- [ ] **Set up structured logging**
+- [x] **Set up structured logging**
   - RED: Test logger not configured initially
   - RED: Test log format is not JSON
   - GREEN: Create logger factory with JSON formatter
@@ -102,50 +102,50 @@
   - REFACTOR: Add context manager for operation timing
   - Test: `with log_operation("test"): pass` logs duration
 
-- [ ] **Create SQL test harness**
-  - RED: Test harness module doesn't exist
-  - RED: Test can't execute SQL queries
-  - GREEN: Implement harness to run .sql files against DuckDB
-  - GREEN: Support comparing query results to expected outputs
-  - GREEN: Install DuckDB extensions (spatial, h3)
-  - REFACTOR: Add fixtures for test data, parameterized tests
-  - Test: `SELECT 1 as num` returns `[(1,)]`
+- [x] **Create SQL test utilities with qck**
+  - RED: Test sql_runner fixture doesn't exist
+  - RED: Test can't execute SQL strings or files
+  - GREEN: Implement sql_runner fixture using qck package
+  - GREEN: Support both SQL strings and .sql files with Jinja2 templates
+  - GREEN: Install DuckDB extensions (spatial, h3 FROM community)
+  - REFACTOR: Make all SQL utilities available as pytest fixtures
+  - Test: Can run SQL directly: `sql_runner("SELECT 1 as num")` returns `[(1,)]`
 
-- [ ] **Initialize Click CLI structure**
+- [x] **Initialize Click CLI structure**
   - RED: Test CLI entry point doesn't exist
   - RED: Test --config flag not recognized
   - GREEN: Create `cli.py` with basic Click app
   - GREEN: Add --config option with default path
   - GREEN: Connect to pyproject.toml entry point
-  - REFACTOR: Add version, help text
+  - REFACTOR: Add version, help text, command groups for pipeline stages
   - Test: `aviation-anomaly --help` shows usage
 
-- [ ] **Configure pytest with markers**
+- [x] **Configure pytest with markers and fixtures**
   - RED: Test markers not defined
   - RED: Test fixtures not available
-  - GREEN: Update pytest.ini with unit/integration markers
-  - GREEN: Create conftest.py with shared fixtures
+  - GREEN: Update pyproject.toml with unit/integration markers
+  - GREEN: Create conftest.py with shared fixtures (duckdb_conn, sql_runner, etc.)
   - GREEN: Add tmp_path fixtures for test isolation
-  - REFACTOR: Add test utilities module
+  - REFACTOR: Consolidate all test utilities as fixtures in conftest.py
   - Test: `pytest -m unit` runs only unit tests
 
-- [ ] **Set up linting and type checking**
+- [x] **Set up linting and type checking**
   - RED: Code fails ruff formatting check
   - RED: Type annotations missing or incorrect
   - GREEN: Fix all ruff violations
   - GREEN: Add basic type hints to all functions
-  - GREEN: Configure pre-commit hooks
-  - REFACTOR: Fine-tune ruff/mypy rules
+  - GREEN: Configure ruff and mypy in pyproject.toml
+  - REFACTOR: Use `make check` for all quality checks
   - Test: `ruff check`, `mypy` pass without errors
 
 **Manual QC Checklist**:
-- [ ] Run `pytest` - all tests pass
-- [ ] Run `ruff check` - no violations
-- [ ] Run `mypy aviation_anomaly` - no errors
-- [ ] Load sample config.toml successfully
-- [ ] Verify JSON logs include all required fields
-- [ ] SQL test harness executes sample query
-- [ ] CLI help text is clear and complete
+- [x] Run `pytest` - all tests pass (26 tests)
+- [x] Run `ruff check` - no violations
+- [x] Run `mypy aviation_anomaly` - no errors
+- [x] Load sample config.toml successfully
+- [x] Verify JSON logs include all required fields
+- [x] SQL test harness executes sample query (via sql_runner fixture)
+- [x] CLI help text is clear and complete
 
 **Commit Message**: `feat: establish project foundation with config, logging, and test framework`
 
@@ -469,7 +469,7 @@
   - GREEN: Filter for squawks in {7500, 7600, 7700}
   - GREEN: Map codes to types:
     - 7500 → "unlawful_interference"
-    - 7600 → "lost_comms"  
+    - 7600 → "lost_comms"
     - 7700 → "general_emergency"
   - REFACTOR: Add squawk validation (4-digit octal)
   - Test: Squawk 7701 ignored, 7700 detected
@@ -1020,7 +1020,7 @@
   - GREEN: Open panel on hex click
   - GREEN: Fetch details via HTMX:
     ```html
-    <div hx-get="/api/drilldown?..." 
+    <div hx-get="/api/drilldown?..."
          hx-trigger="hexclick">
     ```
   - GREEN: Display incident table
@@ -1236,7 +1236,7 @@
 **All phases complete**: The Aviation Anomaly Tracker is ready for production deployment. The system successfully:
 
 1. ✅ Extracts OpenSky flight data
-2. ✅ Detects and analyzes emergency incidents  
+2. ✅ Detects and analyzes emergency incidents
 3. ✅ Aggregates to H3 hexagonal grid
 4. ✅ Generates optimized map tiles
 5. ✅ Serves drill-down details via API

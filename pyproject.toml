@@ -2,7 +2,7 @@
 name = "aviation-anomaly"
 version = "0.1.0"
 description = "Aviation anomaly tracker - analyze emergency patterns in flight data"
-readme = "README.md"
+# readme = "README.md"  # TODO: Add README later
 requires-python = ">=3.13"
 dependencies = [
     "click>=8.1.0",
@@ -10,6 +10,7 @@ dependencies = [
     "jinja2>=3.1.0",
     "pyopensky>=2.0",
     "python-dotenv>=1.0.0",
+    "qck>=0.1.0",
 ]
 
 [project.scripts]
@@ -39,7 +40,6 @@ dev-dependencies = [
     "mypy>=1.13.0",
     "ruff>=0.8.0",
     "pre-commit>=3.5.0",
-    "types-click>=8.1.0",
 ]
 
 [tool.pytest.ini_options]
