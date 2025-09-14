@@ -36,10 +36,11 @@ exclude = [
 package = true
 dev-dependencies = [
     "pytest>=8.0.0",
-    "pytest-xdist>=3.6.0",  # For parallel test execution
+    "pytest-xdist>=3.6.0", # For parallel test execution
     "mypy>=1.13.0",
     "ruff>=0.8.0",
     "pre-commit>=3.5.0",
+    "types-requests>=2.32.4.20250913",
 ]
 
 [tool.pytest.ini_options]

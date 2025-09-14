@@ -116,9 +116,7 @@ def sql_runner(tmp_path) -> Callable:
     """
 
     def run_sql(
-        sql: Path | str, 
-        params: dict[str, Any] | None = None, 
-        conn: duckdb.DuckDBPyConnection | None = None
+        sql: Path | str, params: dict[str, Any] | None = None, conn: duckdb.DuckDBPyConnection | None = None
     ) -> list[tuple]:
         """Run SQL from a file or string and return results.
 
