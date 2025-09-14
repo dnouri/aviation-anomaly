@@ -158,12 +158,12 @@
 - [ ] **Build test data extractor**
   - RED: Test no data extraction capability
   - RED: Test extraction fails for invalid date range
-  - GREEN: Query 1 hour of states data using Trino connection
-  - GREEN: Scale to 48-hour extraction
+  - GREEN: Query daily data from state_vectors_data4 using hour partitions
+  - GREEN: Stream through DuckDB to handle ~500M rows/day
   - GREEN: Save as Parquet with schema preservation
-  - REFACTOR: Add progress reporting, chunking
-  - Test: Extract 2024-01-01 00:00 to 2024-01-02 23:59
-  - Note: Choose date range with known good data coverage
+  - REFACTOR: Add progress reporting, error handling
+  - Test: Extract 2024-01-01 (full day via DuckDB streaming)
+  - Note: Table is `minio.osky.state_vectors_data4` with `hour` partition column
 
 - [ ] **Create test data cache system**
   - RED: Test cache miss on first run
@@ -187,22 +187,22 @@
   - Test: Synthetic data matches real data schema
 
 - [ ] **Create extraction SQL queries**
-  - RED: Test SQL file doesn't exist
+  - RED: Test SQL query template doesn't exist
   - RED: Test query missing required columns
-  - GREEN: Write `sql/extraction/daily_states.sql`
+  - GREEN: Create query for `minio.osky.state_vectors_data4`
   - GREEN: Select only required fields from SPEC §3.1
-  - GREEN: Add WHERE clause for date range
-  - REFACTOR: Optimize with appropriate hints/limits
+  - GREEN: Use hour partition predicates for efficiency
+  - REFACTOR: Ensure partition pruning with proper WHERE clause
   - Test: Query returns exactly the columns specified
 
-- [ ] **Implement daily data chunking**
+- [ ] **Implement daily data extraction**
   - RED: Test can't extract single day
   - RED: Test fails on invalid date
-  - GREEN: Extract one day of data (UTC boundaries)
+  - GREEN: Extract one day using hour partitions (24 hours)
+  - GREEN: Stream via DuckDB directly to Parquet
   - GREEN: Handle months with 28/29/30/31 days
-  - GREEN: Process days sequentially to manage memory
-  - REFACTOR: Add parallel processing with constraints
-  - Test: February extraction handles leap years correctly
+  - REFACTOR: Add retry logic for network failures
+  - Test: Memory usage stays under 2GB for 500M rows
 
 [Remaining Phase 2-9 tasks continue as in original, but updated to reflect current technical decisions]
 
@@ -221,7 +221,11 @@
 - **Password Authentication Only**: OpenSky Trino doesn't support OAuth client credentials
 - **Local Token Cache**: `.opensky_tokens.json` in current directory (not home folder)
 - **Environment Variables**: `OPENSKY_USERNAME` and `OPENSKY_PASSWORD` for CI/CD
-- **No Pandas**: Direct Trino results, optional DuckDB bridge
+- **Correct Table**: `minio.osky.state_vectors_data4` (not `states_history_data4`)
+- **Partition Strategy**: Hour partitions only (no day partition), query full day range
+- **DuckDB Streaming**: Handle ~500M rows/day without loading into memory
+- **No Pandas**: Direct Trino → DuckDB → Parquet pipeline
+- **No pyopensky**: Direct Trino connection instead of external library
 - **Config Simplicity**: Business logic only in config.toml, no auth settings
 
 ### Next Steps
