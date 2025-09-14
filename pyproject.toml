@@ -7,9 +7,11 @@ requires-python = ">=3.13"
 dependencies = [
     "click>=8.1.0",
     "duckdb>=1.1.0",
+    "pyarrow>=21.0.0",
     "pydantic>=2.11.9",
     "qck>=0.1.0",
     "requests>=2.31.0",
+    "tqdm>=4.67.1",
     "trino>=0.328.0",
 ]
 
@@ -36,10 +38,11 @@ exclude = [
 package = true
 dev-dependencies = [
     "pytest>=8.0.0",
-    "pytest-xdist>=3.6.0",  # For parallel test execution
+    "pytest-xdist>=3.6.0", # For parallel test execution
     "mypy>=1.13.0",
     "ruff>=0.8.0",
     "pre-commit>=3.5.0",
+    "types-requests>=2.32.4.20250913",
 ]
 
 [tool.pytest.ini_options]

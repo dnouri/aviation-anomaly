@@ -69,11 +69,12 @@ This document defines the end‑to‑end system that ingests OpenSky state vecto
 
 ### 3.1 OpenSky States History (via Trino)
 
-- **Table**: `opensky.states_history_data4` (or successor)
-- **Required fields**: `time` (unix s), `icao24`, `callsign` (nullable), `lat`, `lon`, `baro_altitude` (nullable), `geo_altitude` (nullable), `velocity` (nullable), `heading` (nullable), `vertrate` (nullable), `squawk` (nullable), plus quality flags where available.
-- **Query window**: calendar months (UTC).
-- **Access**: batch SQL via pyopensky's Trino connection with OAuth authentication; no API calls in Stage‑2+.
-- **Implementation**: Uses pyopensky library (≥2.0) for connection management and authentication.
+- **Table**: `minio.osky.state_vectors_data4`
+- **Required fields**: `time` (unix s), `icao24`, `callsign` (nullable), `lat`, `lon`, `baroaltitude` (nullable), `geoaltitude` (nullable), `velocity` (nullable), `heading` (nullable), `vertrate` (nullable), `squawk` (nullable), `onground` (boolean), `alert` (boolean).
+- **Partition**: Table is partitioned by `hour` (unix timestamp of hour start, not `day`).
+- **Query window**: calendar months (UTC), extracted daily.
+- **Access**: Direct Trino connection with password authentication; streaming via DuckDB for memory efficiency.
+- **Implementation**: Uses `trino` Python client with JWT authentication from password grant flow.
 
 ### 3.2 OpenSky Aircraft Registry
 
@@ -97,8 +98,17 @@ This document defines the end‑to‑end system that ingests OpenSky state vecto
 **Purpose**: Pull states into **monthly** Parquet partitions on local filesystem.
 **Inputs**: `year, month` (UTC).
 **Columns**: only required fields (§3.1) to reduce size.
-**Chunking**: request by **day**, unioned into the month.
-**Output path**: `data/raw/year=YYYY/month=MM/part-*.parquet` + MANIFEST.toml.
+**Chunking**: Query by **hour** (24 queries per day), stream via DuckDB to Parquet.
+**Output paths**: 
+- Hourly: `data/raw/states_YYYY-MM-DD_HH.parquet` (intermediate)
+- Daily: `data/raw/states_YYYY-MM-DD.parquet` (consolidated)
+
+**Implementation Details**
+- Query each hour partition individually: `WHERE hour = unix_timestamp`
+- Collect results in memory then use PyArrow zero-copy to DuckDB
+- Atomic writes with .tmp files for crash safety
+- Resume support: skip existing hourly/daily files
+- Rate limiting retry with exponential backoff
 
 **Guards**
 - Reject rows with `lat/lon` null.
