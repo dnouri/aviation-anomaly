@@ -40,10 +40,9 @@ def extract_day(date: datetime.date, output_dir: Path) -> Path:
     start_ts = int(start_dt.timestamp())
     end_ts = start_ts + 86400  # 24 hours later
 
-    # Only select columns we actually need for the project
-    # Essential: time, icao24, callsign, lat, lon, squawk
-    # Keep for filtering: onground, alert
-    # Dropped: baroaltitude, geoaltitude, velocity, heading, vertrate (not used in SPEC)
+    # Select columns needed for emergency squawk detection and H3 aggregation
+    # Core data: time, icao24, callsign, lat, lon, squawk
+    # Filtering: onground, alert
     query = f"""
     SELECT
         time,
@@ -72,7 +71,7 @@ def extract_day(date: datetime.date, output_dir: Path) -> Path:
         # Stream results through DuckDB to Parquet
         conn = duckdb.connect()
 
-        # Create table with reduced schema (only needed columns)
+        # Create table schema
         conn.execute("""
             CREATE TABLE states (
                 time BIGINT,

@@ -36,7 +36,7 @@ def test_extraction_rejects_pre_opensky_date():
 
 def test_extract_day_creates_parquet_file(tmp_path, monkeypatch):
     """Test that extraction creates a Parquet file with correct schema."""
-    # Mock TrinoQueryEngine to return sample data (reduced columns)
+    # Mock TrinoQueryEngine to return sample data
     mock_query_result = [
         # Sample state vectors data: time, icao24, callsign, lat, lon, squawk, onground, alert
         (1704067200, "abc123", "UAL123  ", 40.7128, -74.0060, "1234", False, False),
@@ -61,7 +61,7 @@ def test_extract_day_creates_parquet_file(tmp_path, monkeypatch):
         assert result is not None
         assert result[0] == 3  # Should have 3 rows
 
-        # Verify schema (reduced columns)
+        # Verify schema
         schema = conn.execute(f"DESCRIBE SELECT * FROM '{output_file}'").fetchall()
         column_names = [col[0] for col in schema]
         expected_columns = [
