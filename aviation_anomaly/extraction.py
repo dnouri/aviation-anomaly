@@ -35,10 +35,15 @@ def extract_day(date: datetime.date, output_dir: Path) -> Path:
     # Create output directory if needed
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build query for all 24 hour partitions of the day
-    start_ts = int(datetime.datetime.combine(date, datetime.time.min).timestamp())
+    # Build query for all 24 hour partitions of the day (UTC)
+    start_dt = datetime.datetime.combine(date, datetime.time.min, tzinfo=datetime.timezone.utc)
+    start_ts = int(start_dt.timestamp())
     end_ts = start_ts + 86400  # 24 hours later
 
+    # Only select columns we actually need for the project
+    # Essential: time, icao24, callsign, lat, lon, squawk
+    # Keep for filtering: onground, alert
+    # Dropped: baroaltitude, geoaltitude, velocity, heading, vertrate (not used in SPEC)
     query = f"""
     SELECT
         time,
@@ -46,11 +51,6 @@ def extract_day(date: datetime.date, output_dir: Path) -> Path:
         callsign,
         lat,
         lon,
-        baroaltitude,
-        geoaltitude,
-        velocity,
-        heading,
-        vertrate,
         squawk,
         onground,
         alert
@@ -72,7 +72,7 @@ def extract_day(date: datetime.date, output_dir: Path) -> Path:
         # Stream results through DuckDB to Parquet
         conn = duckdb.connect()
 
-        # Create table with proper schema
+        # Create table with reduced schema (only needed columns)
         conn.execute("""
             CREATE TABLE states (
                 time BIGINT,
@@ -80,11 +80,6 @@ def extract_day(date: datetime.date, output_dir: Path) -> Path:
                 callsign VARCHAR,
                 lat DOUBLE,
                 lon DOUBLE,
-                baroaltitude DOUBLE,
-                geoaltitude DOUBLE,
-                velocity DOUBLE,
-                heading DOUBLE,
-                vertrate DOUBLE,
                 squawk VARCHAR,
                 onground BOOLEAN,
                 alert BOOLEAN
@@ -102,14 +97,14 @@ def extract_day(date: datetime.date, output_dir: Path) -> Path:
         for row in results:
             batch.append(row)
             if len(batch) >= batch_size:
-                conn.executemany("INSERT INTO states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", batch)
+                conn.executemany("INSERT INTO states VALUES (?, ?, ?, ?, ?, ?, ?, ?)", batch)
                 row_count += len(batch)
                 pbar.update(len(batch))
                 batch = []
 
         # Insert remaining rows
         if batch:
-            conn.executemany("INSERT INTO states VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", batch)
+            conn.executemany("INSERT INTO states VALUES (?, ?, ?, ?, ?, ?, ?, ?)", batch)
             row_count += len(batch)
             pbar.update(len(batch))
 
