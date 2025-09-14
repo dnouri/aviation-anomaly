@@ -161,31 +161,3 @@ def sql_runner(tmp_path) -> Callable:
             return list(result) if result else []
 
     return run_sql
-
-
-@pytest.fixture
-def sql_asserter() -> Callable:
-    """Provide a function to assert SQL results match expected output.
-
-    Returns:
-        Function that asserts SQL results equality
-    """
-
-    def assert_sql_equals(actual: list[tuple], expected: list[tuple], message: str | None = None) -> None:
-        """Assert SQL query results match expected output.
-
-        Args:
-            actual: Actual query results
-            expected: Expected results
-            message: Optional assertion message
-
-        Raises:
-            AssertionError: If results don't match
-        """
-        if actual != expected:
-            msg = message or "SQL results do not match"
-            raise AssertionError(f"{msg}\nExpected: {expected}\nActual:   {actual}")
-
-    return assert_sql_equals
-
-

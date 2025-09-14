@@ -1,0 +1,25 @@
+# Aviation Anomaly Tracker Configuration
+# This file contains business logic configuration only.
+# Authentication is handled via environment variables or prompts.
+
+[segments]
+# Minutes of gap to split flight segments
+gap_minutes = 20
+# Minimum segment duration in seconds
+min_duration_s = 600
+# Minimum segment distance in kilometers
+min_distance_km = 30.0
+
+[incidents]
+# Minutes to debounce incidents (group closely-timed emergencies)
+debounce_minutes = 15
+# Maximum incident duration in seconds
+max_duration_cap_s = 5400
+
+[aggregation]
+# Minimum flights for analysis
+min_flights_threshold = 50
+# Flights needed for good coverage
+good_coverage_min_flights = 100
+# Points needed for good coverage
+good_coverage_min_points = 4

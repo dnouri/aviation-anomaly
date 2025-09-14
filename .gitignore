@@ -70,3 +70,7 @@ temp/
 
 # Pre-commit
 .pre-commit-config.yaml.lock
+
+# OpenSky credentials and tokens
+credentials.json
+.opensky_tokens.json

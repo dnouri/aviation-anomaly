@@ -1,121 +1,109 @@
-"""Configuration loading and validation."""
+"""Configuration management for Aviation Anomaly Tracker."""
 
 import tomllib
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Self
+
+from pydantic import BaseModel, Field, field_validator
 
 
-class ConfigError(Exception):
-    """Configuration-related errors."""
-
-    pass
-
-
-@dataclass
-class SegmentsConfig:
-    """Segmentation configuration."""
-
-    gap_minutes: int
-    min_duration_s: int = 600
-    min_distance_km: int = 30
-
-
-@dataclass
-class IncidentsConfig:
-    """Incident detection configuration."""
-
-    debounce_minutes: int
-    max_duration_cap_s: int = 5400
-
-
-@dataclass
-class AggregationConfig:
-    """Aggregation configuration."""
-
-    min_flights_threshold: int
-    good_coverage_min_flights: int = 100
-    good_coverage_min_points: int = 4
-
-
-@dataclass
-class Config:
-    """Application configuration."""
-
-    segments: SegmentsConfig
-    incidents: IncidentsConfig
-    aggregation: AggregationConfig
-
+class SegmentConfig(BaseModel):
+    """Configuration for flight segment processing."""
+    
+    gap_minutes: int = Field(default=20, description="Minutes of gap to split segments")
+    min_duration_s: int = Field(default=600, description="Minimum segment duration in seconds")
+    min_distance_km: float = Field(default=30.0, description="Minimum segment distance in km")
+    
+    @field_validator("gap_minutes", "min_duration_s")
     @classmethod
-    def from_file(cls, path: Path) -> Self:
+    def validate_positive(cls, v: int) -> int:
+        """Ensure values are positive."""
+        if v <= 0:
+            raise ValueError("Must be positive")
+        return v
+
+
+class IncidentConfig(BaseModel):
+    """Configuration for incident detection."""
+    
+    debounce_minutes: int = Field(default=15, description="Minutes to debounce incidents")
+    max_duration_cap_s: int = Field(default=5400, description="Maximum incident duration in seconds")
+    
+    @field_validator("debounce_minutes", "max_duration_cap_s")
+    @classmethod
+    def validate_positive(cls, v: int) -> int:
+        """Ensure values are positive."""
+        if v <= 0:
+            raise ValueError("Must be positive")
+        return v
+
+
+class AggregationConfig(BaseModel):
+    """Configuration for data aggregation."""
+    
+    min_flights_threshold: int = Field(default=50, description="Minimum flights for analysis")
+    good_coverage_min_flights: int = Field(default=100, description="Flights for good coverage")
+    good_coverage_min_points: int = Field(default=4, description="Points for good coverage")
+    
+    @field_validator("min_flights_threshold", "good_coverage_min_flights", "good_coverage_min_points")
+    @classmethod
+    def validate_positive(cls, v: int) -> int:
+        """Ensure values are positive."""
+        if v <= 0:
+            raise ValueError("Must be positive")
+        return v
+
+
+class Config(BaseModel):
+    """Main configuration for Aviation Anomaly Tracker."""
+    
+    segments: SegmentConfig = Field(default_factory=SegmentConfig)
+    incidents: IncidentConfig = Field(default_factory=IncidentConfig)
+    aggregation: AggregationConfig = Field(default_factory=AggregationConfig)
+    
+    @classmethod
+    def from_file(cls, path: Path | str) -> "Config":
         """Load configuration from TOML file.
-
+        
         Args:
-            path: Path to TOML configuration file
-
+            path: Path to config.toml file
+            
         Returns:
-            Parsed configuration object
-
+            Config instance
+            
         Raises:
-            ConfigError: If file missing, invalid TOML, or missing required fields
+            ConfigError: If file cannot be loaded or parsed
         """
+        path = Path(path)
+        
         if not path.exists():
             raise ConfigError(f"Config file not found: {path}")
-
+        
         try:
             with open(path, "rb") as f:
                 data = tomllib.load(f)
-        except tomllib.TOMLDecodeError as e:
-            raise ConfigError(f"Invalid TOML in {path}: {e}") from e
+        except Exception as e:
+            raise ConfigError(f"Failed to parse config file: {e}") from e
+        
+        try:
+            return cls(**data)
+        except Exception as e:
+            raise ConfigError(f"Invalid configuration: {e}") from e
+    
+    def save(self, path: Path | str) -> None:
+        """Save configuration to TOML file.
+        
+        Args:
+            path: Path to save config.toml file
+        """
+        import tomli_w
+        
+        path = Path(path)
+        data = self.model_dump()
+        
+        with open(path, "wb") as f:
+            tomli_w.dump(data, f)
 
-        # Validate required sections exist
-        required_sections = ["segments", "incidents", "aggregation"]
-        for section in required_sections:
-            if section not in data:
-                raise ConfigError(f"Missing required section: {section}")
 
-        # Parse each section with validation
-        segments = cls._parse_segments(data["segments"])
-        incidents = cls._parse_incidents(data["incidents"])
-        aggregation = cls._parse_aggregation(data["aggregation"])
-
-        return cls(
-            segments=segments,
-            incidents=incidents,
-            aggregation=aggregation,
-        )
-
-    @staticmethod
-    def _parse_segments(data: dict) -> SegmentsConfig:
-        """Parse and validate segments configuration."""
-        if "gap_minutes" not in data:
-            raise ConfigError("Missing required field: segments.gap_minutes")
-
-        return SegmentsConfig(
-            gap_minutes=data["gap_minutes"],
-            min_duration_s=data.get("min_duration_s", 600),
-            min_distance_km=data.get("min_distance_km", 30),
-        )
-
-    @staticmethod
-    def _parse_incidents(data: dict) -> IncidentsConfig:
-        """Parse and validate incidents configuration."""
-        if "debounce_minutes" not in data:
-            raise ConfigError("Missing required field: incidents.debounce_minutes")
-
-        return IncidentsConfig(
-            debounce_minutes=data["debounce_minutes"],
-            max_duration_cap_s=data.get("max_duration_cap_s", 5400),
-        )
-
-    @staticmethod
-    def _parse_aggregation(data: dict) -> AggregationConfig:
-        """Parse and validate aggregation configuration."""
-        if "min_flights_threshold" not in data:
-            raise ConfigError("Missing required field: aggregation.min_flights_threshold")
-
-        return AggregationConfig(
-            min_flights_threshold=data["min_flights_threshold"],
-            good_coverage_min_flights=data.get("good_coverage_min_flights", 100),
-            good_coverage_min_points=data.get("good_coverage_min_points", 4),
-        )
+class ConfigError(Exception):
+    """Configuration error."""
+    pass
