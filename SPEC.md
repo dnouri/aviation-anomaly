@@ -98,13 +98,17 @@ This document defines the end‑to‑end system that ingests OpenSky state vecto
 **Purpose**: Pull states into **monthly** Parquet partitions on local filesystem.
 **Inputs**: `year, month` (UTC).
 **Columns**: only required fields (§3.1) to reduce size.
-**Chunking**: Query by **day** (all 24 hour partitions), stream via DuckDB to Parquet.
-**Output path**: `data/raw/year=YYYY/month=MM/part-*.parquet` + MANIFEST.toml.
+**Chunking**: Query by **hour** (24 queries per day), stream via DuckDB to Parquet.
+**Output paths**: 
+- Hourly: `data/raw/states_YYYY-MM-DD_HH.parquet` (intermediate)
+- Daily: `data/raw/states_YYYY-MM-DD.parquet` (consolidated)
 
 **Implementation Details**
-- Query uses hour partition range: `WHERE hour >= day_start AND hour < day_end`
-- Stream results through DuckDB to handle ~500M rows/day efficiently
-- DuckDB writes directly to Parquet without loading all data into memory
+- Query each hour partition individually: `WHERE hour = unix_timestamp`
+- Collect results in memory then use PyArrow zero-copy to DuckDB
+- Atomic writes with .tmp files for crash safety
+- Resume support: skip existing hourly/daily files
+- Rate limiting retry with exponential backoff
 
 **Guards**
 - Reject rows with `lat/lon` null.

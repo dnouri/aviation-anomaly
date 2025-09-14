@@ -63,6 +63,12 @@ def main(ctx: click.Context, config: Path) -> None:
     default=Path("data/raw"),
     help="Output directory for Parquet files",
 )
+@click.option(
+    "--no-resume",
+    is_flag=True,
+    default=False,
+    help="Force re-download of existing files (default: resume from existing)",
+)
 @click.pass_context
 def extract(
     ctx: click.Context,
@@ -70,10 +76,12 @@ def extract(
     from_date: datetime.datetime | None,
     to_date: datetime.datetime | None,
     output_dir: Path,
+    no_resume: bool,
 ) -> None:
     """Extract daily data from OpenSky to Parquet files.
 
     Use either --date for a single day or --from-date and --to-date for a range.
+    By default, skips existing hourly files (resumable). Use --no-resume to re-download.
     """
     from aviation_anomaly.extraction import extract_date_range, extract_day
     from aviation_anomaly.logging import configure_logging
@@ -95,8 +103,16 @@ def extract(
         extract_date = date.date()
         click.echo(f"Extracting data for {extract_date}")
         click.echo(f"Output directory: {output_dir}")
+        if no_resume:
+            click.echo("Force re-download: enabled")
 
-        output_file = extract_day(extract_date, output_dir)
+        try:
+            output_file = extract_day(extract_date, output_dir, force_redownload=no_resume)
+        except Exception as e:
+            # Let the error propagate but ensure it's visible to the user
+            if "QUERY_QUEUE_FULL" in str(e):
+                click.echo("\n⚠️  Rate limiting detected. See error message above for instructions.", err=True)
+            raise
 
         # Get file stats
         size_mb = output_file.stat().st_size / (1024 * 1024)
@@ -120,8 +136,16 @@ def extract(
 
         click.echo(f"Extracting data from {start} to {end}")
         click.echo(f"Output directory: {output_dir}")
+        if no_resume:
+            click.echo("Force re-download: enabled")
 
-        output_files = extract_date_range(start, end, output_dir)
+        try:
+            output_files = extract_date_range(start, end, output_dir, force_redownload=no_resume)
+        except Exception as e:
+            # Let the error propagate but ensure it's visible to the user
+            if "QUERY_QUEUE_FULL" in str(e):
+                click.echo("\n⚠️  Rate limiting detected. See error message above for instructions.", err=True)
+            raise
 
         # Summary statistics
         total_size = sum(f.stat().st_size for f in output_files) / (1024 * 1024)
