@@ -127,7 +127,7 @@ def extract_hour(date: datetime.date, hour: int, output_dir: Path) -> Path:
                     alert BOOLEAN
                 )
             """)
-            conn.execute(f"COPY empty_states TO '{output_file}' (FORMAT PARQUET, COMPRESSION 'snappy')")
+            conn.execute(f"COPY empty_states TO '{output_file}' (FORMAT PARQUET, COMPRESSION 'zstd')")
         else:
             # Convert to Arrow Table for zero-copy integration with DuckDB
             # This is 27x faster and uses 8x less memory than columnar transformation
@@ -146,7 +146,7 @@ def extract_hour(date: datetime.date, hour: int, output_dir: Path) -> Path:
             conn.register('flight_data', arrow_table)
 
             # Write directly to Parquet
-            conn.execute(f"COPY flight_data TO '{temp_file}' (FORMAT PARQUET, COMPRESSION 'snappy')")
+            conn.execute(f"COPY flight_data TO '{temp_file}' (FORMAT PARQUET, COMPRESSION 'zstd')")
 
             # Atomic rename for consistency
             temp_file.rename(output_file)
@@ -227,7 +227,7 @@ def extract_day(date: datetime.date, output_dir: Path, force_redownload: bool = 
                 COPY (
                     SELECT * FROM ({union_query})
                     ORDER BY time
-                ) TO '{daily_file}' (FORMAT PARQUET, COMPRESSION 'snappy')
+                ) TO '{daily_file}' (FORMAT PARQUET, COMPRESSION 'zstd')
             """
             conn.execute(query)
 
