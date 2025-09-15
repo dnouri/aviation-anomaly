@@ -216,27 +216,42 @@ def extract_day(date: datetime.date, output_dir: Path, force_redownload: bool = 
         # Consolidate hourly files into daily file
         logger.info(f"Consolidating {len(hourly_files)} hourly files into {daily_file}")
 
+        # Use temporary file for atomic write
+        temp_file = daily_file.with_suffix('.tmp')
+        
         # Use DuckDB to merge all hourly files
         conn = duckdb.connect()
 
-        # Build UNION ALL query to combine all hourly files
-        union_parts = [f"SELECT * FROM '{f}'" for f in hourly_files if f.exists()]
-        if union_parts:
-            union_query = " UNION ALL ".join(union_parts)
-            query = f"""
-                COPY (
-                    SELECT * FROM ({union_query})
-                    ORDER BY time
-                ) TO '{daily_file}' (FORMAT PARQUET, COMPRESSION 'zstd')
-            """
-            conn.execute(query)
+        try:
+            # Use read_parquet with file list for memory-efficient consolidation
+            # Avoids UNION ALL overhead and ORDER BY memory pressure
+            existing_files = [str(f) for f in hourly_files if f.exists()]
+            if existing_files:
+                # DuckDB's read_parquet handles multiple files efficiently
+                # Files are naturally in chronological order (hour 00-23)
+                query = f"""
+                    COPY (
+                        SELECT * FROM read_parquet({existing_files})
+                    ) TO '{temp_file}' (FORMAT PARQUET, COMPRESSION 'zstd')
+                """
+                conn.execute(query)
 
-        # Get final statistics
-        stats = conn.execute(f"SELECT COUNT(*) as count FROM '{daily_file}'").fetchone()
-        conn.close()
-
-        final_count = stats[0] if stats else 0
-        logger.info(f"Consolidated {final_count:,} rows to {daily_file}")
+                # Get final statistics
+                stats = conn.execute(f"SELECT COUNT(*) as count FROM read_parquet('{temp_file}')").fetchone()
+                final_count = stats[0] if stats else 0
+                
+                # Atomic rename
+                temp_file.rename(daily_file)
+                logger.info(f"Consolidated {final_count:,} rows to {daily_file}")
+            else:
+                logger.warning(f"No hourly files found for {date}, skipping consolidation")
+                final_count = 0
+            
+        finally:
+            conn.close()
+            # Clean up temp file if it still exists (in case of error)
+            if temp_file.exists():
+                temp_file.unlink()
 
         return daily_file
 
