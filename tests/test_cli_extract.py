@@ -1,6 +1,5 @@
 """Test CLI extract command."""
 
-
 import pytest
 from click.testing import CliRunner
 
@@ -9,6 +8,7 @@ from aviation_anomaly.cli import extract
 
 class MockDuckDBConnection:
     """Mock for DuckDB connection."""
+
     def __init__(self, row_count=1000):
         self.row_count = row_count
 
@@ -25,10 +25,12 @@ class MockDuckDBConnection:
 @pytest.fixture
 def mock_duckdb(monkeypatch):
     """Mock duckdb.connect to avoid database operations."""
+
     def mock_connect():
         return MockDuckDBConnection()
 
     import duckdb
+
     monkeypatch.setattr(duckdb, "connect", mock_connect)
 
 

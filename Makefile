@@ -43,10 +43,11 @@ typecheck: ## Run type checking with mypy
 	@echo "✓ Type checking passed"
 
 format: ## Auto-format code with ruff
-	@echo "Formatting code..."
-	uv run ruff format .
-	uv run ruff check --fix .
-	@echo "✓ Code formatted"
+	@echo "Checking code formatting..."
+	@uv run ruff format --check . && echo "✓ Format check passed" || (echo "⚠ Formatting needed, applying..." && uv run ruff format .)
+	@echo "Checking linting..."
+	@uv run ruff check . && echo "✓ Lint check passed" || (echo "⚠ Linting issues found, fixing..." && uv run ruff check --fix .)
+	@echo "✓ Code formatted and checked"
 
 lint: ## Run linting with ruff (no auto-fix)
 	@echo "Linting code..."
