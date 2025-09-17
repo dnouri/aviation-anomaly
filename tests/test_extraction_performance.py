@@ -28,18 +28,11 @@ def test_extract_hour_performance(tmp_path, monkeypatch):
         def execute(self, query):
             return iter(mock_data)
 
-    monkeypatch.setattr(
-        "aviation_anomaly.extraction.TrinoQueryEngine",
-        MockEngine
-    )
+    monkeypatch.setattr("aviation_anomaly.extraction.TrinoQueryEngine", MockEngine)
 
     # Act - Time the extraction
     start_time = time.time()
-    output_file = extract_hour(
-        date=datetime.date(2024, 1, 1),
-        hour=0,
-        output_dir=tmp_path
-    )
+    output_file = extract_hour(date=datetime.date(2024, 1, 1), hour=0, output_dir=tmp_path)
     elapsed = time.time() - start_time
 
     # Assert - Should complete in reasonable time
@@ -51,6 +44,7 @@ def test_extract_hour_performance(tmp_path, monkeypatch):
 
     # Verify data integrity
     import duckdb
+
     conn = duckdb.connect()
     count_result = conn.execute(f"SELECT COUNT(*) FROM '{output_file}'").fetchone()
     assert count_result is not None

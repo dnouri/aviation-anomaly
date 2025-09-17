@@ -11,6 +11,7 @@ from aviation_anomaly import extraction
 
 class MockTrinoEngine:
     """Mock for TrinoQueryEngine."""
+
     def __init__(self):
         self.execute_return_value = []
 
@@ -22,6 +23,7 @@ class MockTrinoEngine:
 
 class MockExtractHour:
     """Mock for tracking extract_hour calls."""
+
     def __init__(self):
         self.call_count = 0
         self.call_args_list = []
@@ -34,6 +36,7 @@ class MockExtractHour:
 
 class MockDuckDBConnection:
     """Mock for DuckDB connection."""
+
     def __init__(self, row_count=1000):
         self.row_count = row_count
 
@@ -91,6 +94,7 @@ def test_extraction_rejects_pre_opensky_date():
 
 def test_extract_day_creates_parquet_file(tmp_path, mock_trino_engine, monkeypatch):
     """Test that extraction creates a Parquet file with correct schema."""
+
     # Configure the mock to return sample data only for hour 0
     def mock_execute(query):
         # Only return data for the first hour query

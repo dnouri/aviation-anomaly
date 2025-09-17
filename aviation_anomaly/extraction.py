@@ -78,7 +78,7 @@ def extract_hour(date: datetime.date, hour: int, output_dir: Path) -> Path:
 ║ 5. Wait a moment for the queue to clear                                     ║
 ║ 6. Retry the extraction                                                     ║
 ║                                                                              ║
-║ Query ID: {e.query_id if hasattr(e, 'query_id') else 'unknown'}             ║
+║ Query ID: {e.query_id if hasattr(e, "query_id") else "unknown"}             ║
 ║ Attempt: {attempt + 1}/{max_retries}                                        ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
@@ -107,7 +107,7 @@ def extract_hour(date: datetime.date, hour: int, output_dir: Path) -> Path:
 
     # Prepare output file paths
     output_file = output_dir / f"states_{date.isoformat()}_{hour:02d}.parquet"
-    temp_file = output_file.with_suffix('.tmp')
+    temp_file = output_file.with_suffix(".tmp")
 
     # Write to Parquet using DuckDB's columnar operations
     conn = duckdb.connect()
@@ -131,19 +131,21 @@ def extract_hour(date: datetime.date, hour: int, output_dir: Path) -> Path:
         else:
             # Convert to Arrow Table for zero-copy integration with DuckDB
             # This is 27x faster and uses 8x less memory than columnar transformation
-            arrow_table = pa.table({
-                'time': [row[0] for row in all_rows],
-                'icao24': [row[1] for row in all_rows],
-                'callsign': [row[2] for row in all_rows],
-                'lat': [row[3] for row in all_rows],
-                'lon': [row[4] for row in all_rows],
-                'squawk': [row[5] for row in all_rows],
-                'onground': [row[6] for row in all_rows],
-                'alert': [row[7] for row in all_rows],
-            })
+            arrow_table = pa.table(
+                {
+                    "time": [row[0] for row in all_rows],
+                    "icao24": [row[1] for row in all_rows],
+                    "callsign": [row[2] for row in all_rows],
+                    "lat": [row[3] for row in all_rows],
+                    "lon": [row[4] for row in all_rows],
+                    "squawk": [row[5] for row in all_rows],
+                    "onground": [row[6] for row in all_rows],
+                    "alert": [row[7] for row in all_rows],
+                }
+            )
 
             # Register Arrow table with DuckDB (zero-copy operation)
-            conn.register('flight_data', arrow_table)
+            conn.register("flight_data", arrow_table)
 
             # Write directly to Parquet
             conn.execute(f"COPY flight_data TO '{temp_file}' (FORMAT PARQUET, COMPRESSION 'zstd')")
@@ -217,8 +219,8 @@ def extract_day(date: datetime.date, output_dir: Path, force_redownload: bool = 
         logger.info(f"Consolidating {len(hourly_files)} hourly files into {daily_file}")
 
         # Use temporary file for atomic write
-        temp_file = daily_file.with_suffix('.tmp')
-        
+        temp_file = daily_file.with_suffix(".tmp")
+
         # Use DuckDB to merge all hourly files
         conn = duckdb.connect()
 
@@ -239,14 +241,14 @@ def extract_day(date: datetime.date, output_dir: Path, force_redownload: bool = 
                 # Get final statistics
                 stats = conn.execute(f"SELECT COUNT(*) as count FROM read_parquet('{temp_file}')").fetchone()
                 final_count = stats[0] if stats else 0
-                
+
                 # Atomic rename
                 temp_file.rename(daily_file)
                 logger.info(f"Consolidated {final_count:,} rows to {daily_file}")
             else:
                 logger.warning(f"No hourly files found for {date}, skipping consolidation")
                 final_count = 0
-            
+
         finally:
             conn.close()
             # Clean up temp file if it still exists (in case of error)
@@ -256,7 +258,9 @@ def extract_day(date: datetime.date, output_dir: Path, force_redownload: bool = 
         return daily_file
 
 
-def extract_date_range(from_date: datetime.date, to_date: datetime.date, output_dir: Path, force_redownload: bool = False) -> list[Path]:
+def extract_date_range(
+    from_date: datetime.date, to_date: datetime.date, output_dir: Path, force_redownload: bool = False
+) -> list[Path]:
     """Extract multiple days of data.
 
     Args:

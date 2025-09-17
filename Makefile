@@ -43,10 +43,11 @@ typecheck: ## Run type checking with mypy
 	@echo "✓ Type checking passed"
 
 format: ## Auto-format code with ruff
-	@echo "Formatting code..."
-	uv run ruff format .
-	uv run ruff check --fix .
-	@echo "✓ Code formatted"
+	@echo "Checking code formatting..."
+	@uv run ruff format --check . && echo "✓ Format check passed" || (echo "⚠ Formatting needed, applying..." && uv run ruff format .)
+	@echo "Checking linting..."
+	@uv run ruff check . && echo "✓ Lint check passed" || (echo "⚠ Linting issues found, fixing..." && uv run ruff check --fix .)
+	@echo "✓ Code formatted and checked"
 
 lint: ## Run linting with ruff (no auto-fix)
 	@echo "Linting code..."
@@ -56,13 +57,34 @@ lint: ## Run linting with ruff (no auto-fix)
 fix-whitespace: ## Fix trailing whitespace and missing newlines at EOF
 	@echo "Fixing whitespace issues..."
 	@# Remove trailing whitespace from Python files (portable sed -i usage)
-	@find . -name "*.py" -type f -exec sed -i.bak 's/[[:space:]]*$$//' {} \; -exec rm {}.bak \;
-	@# Add newline at end of file if missing
-	@find . -name "*.py" -type f -exec sh -c 'tail -c1 {} | read -r _ || echo >> {}' \;
-	@# Also fix Makefile, README, and TOML files
+	@# Exclude .venv, __pycache__, .git, and other build directories
+	@find . -path ./.venv -prune -o \
+		-path ./.git -prune -o \
+		-path ./__pycache__ -prune -o \
+		-path ./dist -prune -o \
+		-path ./build -prune -o \
+		-path ./.mypy_cache -prune -o \
+		-path ./.ruff_cache -prune -o \
+		-path ./.pytest_cache -prune -o \
+		-name "*.py" -type f -print0 | xargs -0 -I {} sh -c 'sed -i.bak "s/[[:space:]]*$$//" "{}" && rm -f "{}.bak"'
+	@# Add newline at end of file if missing (same exclusions)
+	@find . -path ./.venv -prune -o \
+		-path ./.git -prune -o \
+		-path ./__pycache__ -prune -o \
+		-path ./dist -prune -o \
+		-path ./build -prune -o \
+		-path ./.mypy_cache -prune -o \
+		-path ./.ruff_cache -prune -o \
+		-path ./.pytest_cache -prune -o \
+		-name "*.py" -type f -print0 | xargs -0 -I {} sh -c 'tail -c1 "{}" | read -r _ || echo >> "{}"'
+	@# Also fix Makefile, README, and TOML files (with exclusions)
 	@for ext in md toml; do \
-		find . -name "*.$$ext" -type f -exec sed -i.bak 's/[[:space:]]*$$//' {} \; -exec rm {}.bak \; ; \
-		find . -name "*.$$ext" -type f -exec sh -c 'tail -c1 {} | read -r _ || echo >> {}' \; ; \
+		find . -path ./.venv -prune -o \
+			-path ./.git -prune -o \
+			-name "*.$$ext" -type f -print0 | xargs -0 -I {} sh -c 'sed -i.bak "s/[[:space:]]*$$//" "{}" && rm -f "{}.bak"' ; \
+		find . -path ./.venv -prune -o \
+			-path ./.git -prune -o \
+			-name "*.$$ext" -type f -print0 | xargs -0 -I {} sh -c 'tail -c1 "{}" | read -r _ || echo >> "{}"' ; \
 	done
 	@echo "✓ Whitespace fixed"
 
