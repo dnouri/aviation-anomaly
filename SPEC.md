@@ -1,7 +1,8 @@
 # Aviation Anomaly Tracker — Detailed Specification
 
 > Status: **Draft for Dev Handoff**
-> Scope: **Global but shallow** (one multi-month package; Phase‑1 map validated at H3 r4, with r3–r7 prepared)
+> Scope: **Global but shallow** (7-day prototype; Phase‑1 map validated at H3 r4, with r3–r7 prepared)
+> Data Available: **7 days** (July 1-7, 2025) - 5.1 billion records, 109K unique aircraft
 > Decision Log: See §1.3
 
 ---
@@ -25,17 +26,43 @@ This document defines the end‑to‑end system that ingests OpenSky state vecto
 
 ### 1.3 Decision Log (frozen for v1)
 
-- **Denominator**: *Unique flight segments touching a cell per month* (deduped)
-- **Min visibility**: mask cells with **<50 flights/month**
-- **Incident categories**: show **aggregate** and offer **per‑type filters** (7500/7600/7700)
-- **Incident debounce** (type-specific within same segment): **15 minutes**
-- **Include aircraft type** (via OpenSky aircraft DB; nulls allowed)
-- **Tiles**: **PMTiles** packaging for MVT, multi‑month per resolution
-- **Zoom→H3**: z4–5→r3; z6–7→r4; z8–9→r5; z10–11→r6; z12+→r7
-- **Error handling**: **fail fast** on pipeline errors (no retries in v1)
-- **Phase‑1 map**: **global**, one multi‑month PMTiles, **r4** baseline; r3–r7 generated for future zooms
-- **Coverage note**: **Mixed rule** (points/flight & flights thresholds)
-- **Identifiers in drill‑down**: **callsign + registration** when available
+- **Denominator**: *Unique flight segments touching a cell per period* (deduped)
+- **Dual metrics**: Track both `incidents_unique` (for rates) and `incidents_coverage` (for visualization)
+- **Min visibility thresholds** (resolution-scaled):
+  - r3: ≥25 flights/week
+  - r4: ≥50 flights/week
+  - r5: ≥100 flights/week
+- **Incident quality gates** (temporal-based):
+  - Minimum 5 consecutive samples over 60 seconds
+  - Squawk persistence >45 seconds
+  - Airborne validation (≤30% ground samples)
+  - Roller-dial suppression (77XX→7700 patterns)
+  - Confidence score: 0-100 composite
+- **Incident debounce**: 15 minutes (type-specific within segment)
+- **Storage**: Hybrid GeoParquet with geometry + coordinate arrays
+- **Development progression**: 1-hour sample → 1-day validation → 7-day production
+- **Testing strategy**: Synthetic boundaries + real samples + statistical validation
+- **Coverage metric**: Points-per-flight median as sole indicator
+- **Interpolation**: Conservative 5km/30s due to missing velocity data
+- **Error handling**: Fail fast on logic errors, 3 retries with backoff for network errors
+- **Tiles**: PMTiles via Tippecanoe, resolution-specific packages
+- **Zoom→H3 mapping**: z4–5→r3; z6–7→r4; z8–9→r5; z10–11→r6; z12+→r7
+
+### 1.4 ADS-B Data Characteristics
+
+**Available Fields**: `time`, `icao24`, `callsign`, `lat`, `lon`, `squawk`, `onground`, `alert`
+
+**Normal Data Patterns**:
+- ~35% of records have no squawk code (standard for ADS-B)
+- Receiver information not available in this dataset
+- Velocity and altitude data not included
+- These are characteristics of ADS-B networks, not data quality issues
+
+**Mitigation Strategy**:
+- **Missing receiver diversity** → Strengthen temporal validation (5+ samples)
+- **No velocity/heading** → Conservative 5km/30s interpolation
+- **Partial squawk coverage** → Track observable ratios, detect only confirmed
+- **No altitude data** → Focus on lateral movement patterns
 
 ---
 
@@ -99,7 +126,7 @@ This document defines the end‑to‑end system that ingests OpenSky state vecto
 **Inputs**: `year, month` (UTC).
 **Columns**: only required fields (§3.1) to reduce size.
 **Chunking**: Query by **hour** (24 queries per day), stream via DuckDB to Parquet.
-**Output paths**: 
+**Output paths**:
 - Hourly: `data/raw/states_YYYY-MM-DD_HH.parquet` (intermediate)
 - Daily: `data/raw/states_YYYY-MM-DD.parquet` (consolidated)
 
@@ -118,23 +145,67 @@ This document defines the end‑to‑end system that ingests OpenSky state vecto
 
 ### 4.2 Stage‑2 Transformation (Segments & Incidents)
 
-**2.2.1 Segment Builder (v1.1)**
+**4.2.1 Segment Builder**
 - Partition by `icao24`; order by `time`.
-- Start a segment at first point or when **gap > 20 min**.
-- End segment at the last point before the gap.
-- Discard segments with **duration <10 min AND distance <30 km**.
-- Compute **polyline** via great‑circle **interpolation** at max **10 km** chord or **60 s** time step (whichever finer) to avoid cell skips.
+- Start new segment when **gap > 20 minutes** between consecutive points.
+- Filter segments with **duration <10 min AND distance <30 km**.
+- **Conservative interpolation**: 5km chord OR 30s interval (whichever is denser)
+  - Rationale: Compensates for missing velocity/heading data
+  - Validates implied velocity <1000 km/h for data quality
 - Assign `segment_id = hash(icao24, start_time, end_time)`.
+- Track `squawk_coverage_ratio` = observable squawk samples / total samples
 
-**2.2.2 Segment→H3 cells (line cover)**
-- For each segment polyline, compute H3 line‑cover for **r3–r7** using h3-duckdb extension.
-- **Dedup rule**: a segment contributes **at most 1** to the **denominator** per `(cell, month)`.
+**Segment Storage Schema (Hybrid GeoParquet):**
+```sql
+CREATE TABLE segments (
+    segment_id VARCHAR PRIMARY KEY,
+    icao24 VARCHAR NOT NULL,
+    start_time TIMESTAMP,
+    end_time TIMESTAMP,
+    duration_seconds INTEGER,
+    distance_km DOUBLE,
 
-**2.2.3 Incident Detection & Debounce**
-- On a segment, an **incident** starts when squawk enters {7500, 7600, 7700}; ends when it leaves.
-- **Debounce**: events of the **same type** separated by **<15 min** are merged.
-- Record: `incident_id`, `segment_id`, `icao24`, `type`, `t_start`, `t_end`, `duration_s` (cap at 90 min for stats), `callsign_first`, `registration` (from join), `typecode` (nullable).
-- For H3 aggregation, an incident contributes **1** to each **cell** intersected by the **segment** (not duration‑weighted in v1).
+    -- Dual representation for flexibility
+    path GEOMETRY,              -- For spatial operations
+    coordinates DOUBLE[][],     -- For H3 coverage computation
+
+    point_count INTEGER,
+    interpolated_count INTEGER
+)
+```
+
+**4.2.2 Temporal Quality Gates & Confidence Scoring**
+Validate emergency squawks through temporal patterns:
+- **Temporal stability**: Minimum 5 consecutive samples within 60 seconds
+- **Signal persistence**: Squawk must persist >45 seconds
+- **Airborne validation**: ≤30% of samples show `onground=true`
+- **Roller-dial suppression**: Filter transitions like 77XX→7700
+
+**Confidence Score Calculation (0-100)**:
+- Temporal stability: 40% weight (samples_in_window / 5, capped at 1.0)
+- Signal persistence: 30% weight (duration / 60s, capped at 1.0)
+- Airborne ratio: 20% weight (1 - ground_ratio)
+- Squawk coverage: 10% weight (observable_samples / total_samples)
+
+Categories: High (>70), Medium (40-70), Low (<40)
+
+**4.2.3 Incident Detection & Debounce**
+Process only records with observable squawk codes (~65% of data):
+- Skip records with NULL/empty squawk (normal for ADS-B)
+- Incident starts when validated squawk enters {7500, 7600, 7700}
+- **Debounce**: Same-type events <15 minutes apart are merged
+- Minimum 30% squawk coverage for segment to be incident-eligible
+
+Record fields:
+  - Core: `incident_id`, `segment_id`, `squawk_type`, `start_time`, `end_time`
+  - Quality: `confidence_score`, `samples_count`, `squawk_coverage_ratio`
+  - Validation: `passes_quality_gates`, `confidence_category`
+  - Enrichment: `callsign`, `registration`, `typecode` (nullable)
+
+**4.2.4 Segment→H3 Coverage**
+- Compute H3 cells touched by segment polyline for resolutions r3–r7
+- Use coordinate arrays with h3-duckdb `h3_line` function
+- Track both unique segments and coverage per cell
 
 **2.2.4 Aircraft Enrichment (left‑join)**
 - Join aircraft CSV on `icao24` to add `typecode`, `model`, `manufacturer`, `registration`.
@@ -144,16 +215,37 @@ This document defines the end‑to‑end system that ingests OpenSky state vecto
 - `data/curated/segments/year=YYYY/month=MM/segments.parquet`
 - `data/curated/incidents/year=YYYY/month=MM/incidents.parquet`
 
-### 4.3 Stage‑3 Aggregation (Per Month & Resolution)
+### 4.3 Stage‑3 Aggregation (Per Period & Resolution)
 
-For each month and each H3 **resolution r ∈ {3..7}**:
+For each period (week for prototype) and H3 **resolution r ∈ {3..7}**:
 
-- `flights` = **number of unique `segment_id`** that touched the cell (deduped).
-- `incidents_*` = counts of incidents touching the cell (aggregate and per type).
-- `rate_all_ppm` = `incidents_all / flights * 1_000_000` (if `flights`>0, else null).
-- `points_per_flight_median` = median **raw** points per (`segment_id`, cell) for coverage.
-- `top_aircraft_typecode` = mode of incident‑carrying segments’ `typecode` (ties broken by frequency then lexicographically).
-- `coverage_note` = **Good** if `points_per_flight_median≥4 && flights≥100`; **Partial** otherwise; **Mask** if `flights<50`.
+**Dual Metrics Approach:**
+- `flights_unique` = Count of unique segments touching cell (denominator)
+- `incidents_unique` = Count of unique incidents in cell (for rates)
+- `incidents_coverage` = Total incident-cell intersections (for heatmap)
+- `rate_unique_ppm` = `incidents_unique / flights_unique * 1e6`
+- `rate_coverage_ppm` = `incidents_coverage / flights_unique * 1e6`
+
+**Coverage Quality Metrics:**
+- `points_per_flight_median` = Primary coverage indicator
+- Coverage categories based on observation density:
+  - Excellent: ≥10 points per flight
+  - Good: 6-9 points per flight
+  - Limited: 3-5 points per flight
+  - Poor: <3 points per flight (consider masking)
+
+**Statistical Confidence:**
+- `confidence_category` based on flight counts:
+  - High: >500 flights (opacity 100%)
+  - Medium: 100-500 flights (opacity 60%)
+  - Low: <100 flights (opacity 30%)
+- Future v1.1: Add Empirical-Bayes smoothed rates with credible intervals
+
+**Visibility Thresholds (resolution-scaled):**
+- r3: Mask if <25 flights/week
+- r4: Mask if <50 flights/week
+- r5: Mask if <100 flights/week
+- r6-r7: Scale proportionally by cell area
 
 **Output**
 - `/aggregates/res=r{r}/aggregates_YYYYMM.parquet` (+ MANIFEST.toml)
@@ -200,15 +292,39 @@ coverage_note (enum: good|partial|mask)
 
 ### 5.2 UX Requirements
 
-- **Legend**: hybrid color scale (fixed base + quantile tail); grey = “Insufficient data (<50 flights)”.
-- **Tooltip (on hover/click)**:
-  - `rate_all_ppm`, `flights`, `incidents_all`, breakdown (7500/7600/7700), `top_aircraft_typecode` (if any), `coverage_note`.
-- **Filters**: month (single), squawk type (All / 7500 / 7600 / 7700).
-- **Resolution control** (advanced): lock to a chosen H3 res.
-- **Drill‑down (side panel)**: table for the selected (month, cell):
-  - `timestamp_start`, `timestamp_end`, `squawk_type`, `icao24`, `callsign`, `registration`, `typecode` (nullable).
-  - Sort by time desc; CSV export; max 200 rows (paginate).
-- **Accessibility**: color‑blind‑safe palette; keyboard focus indicators; descriptive ARIA labels.
+**5.2.1 Coverage Communication**
+- **Persistent header**: "Emergency squawk rates from observed traffic. Coverage and procedures vary by region."
+- **Legend enhancement**:
+  - Color scale with confidence indicators (opacity shows data reliability)
+  - Coverage quality overlay (dots/hatching for limited coverage areas)
+  - "About the Data" expandable section explaining limitations
+- **Regional context**: Tooltips include note about regional procedural differences
+
+**5.2.2 Map Visualization**
+- **Dual-layer approach**:
+  - Primary: Incident rate heatmap with confidence-based opacity
+  - Overlay: Coverage quality indicators (optional toggle)
+- **Tooltip content**:
+  - Rates: Both unique and coverage metrics
+  - Confidence: Flight count and category
+  - Coverage: Quality score and category
+  - Context: Regional notes when relevant
+- **Color scheme**: Color-blind safe with distinct patterns for low confidence
+
+**5.2.3 Filters & Controls**
+- **Time selector**: Day view or full week
+- **Squawk filter**: All / 7500 / 7600 / 7700
+- **Coverage overlay**: Toggle on/off
+- **Confidence display**: Raw vs smoothed rates (v1.1)
+- **Resolution lock**: Advanced option to fix H3 resolution
+
+**5.2.4 Drill-down Details**
+- **Enhanced incident table**:
+  - Core: Time, squawk, aircraft ID, callsign
+  - Quality: Confidence score, sample count
+  - Context: Phase of flight (when available in v2)
+- **Export options**: CSV with full metadata
+- **Pagination**: 200 rows max, clear navigation
 
 ### 5.3 Performance Budgets
 
@@ -260,14 +376,41 @@ coverage_note (enum: good|partial|mask)
 
 ## 7. Testing & Validation
 
-### 7.1 Unit Tests
+### 7.1 Testing Strategy
 
-- **SQL Testing**: Pure SQL tests using separate .sql files with test harness.
-- **Segment builder**: gap boundaries (19m = same, 20m = new), min duration/distance filters.
-- **Interpolation**: ensures intermediate points prevent H3 skips on long legs.
-- **Line cover**: property‐based tests on synthetic polylines vs known cell sets.
-- **Debounce**: 5/10/15/60‑min scenarios; type‑specific merging only.
-- **Aggregation math**: denominator dedupe; rate calculation; coverage note thresholds.
+**7.1.1 Development Dataset Hierarchy**
+- **Sample**: 1 hour (July 1, 00:00-01:00 UTC) - 30M records for rapid iteration
+- **Validation**: 1 day (July 1) - 730M records for integration testing
+- **Production**: 7 days (July 1-7) - 5.1B records for final validation
+
+**Performance Expectations (with dense interpolation):**
+- 1-hour processing: <30 seconds
+- 1-day processing: <15 minutes
+- 7-day processing: <2 hours
+
+**7.1.2 Three-Layer Testing Approach**
+
+**Synthetic Boundary Tests:**
+- Gap detection at exactly 20 minutes (fail at 19:59, pass at 20:00)
+- Segment filtering at 10min/30km thresholds
+- Dense interpolation at 5km/30s intervals
+- Temporal quality gates: 4 vs 5 samples in 60s window
+- Signal persistence: 44s vs 45s threshold
+- Ground ratio: 29% vs 30% threshold
+- Confidence score calculation accuracy
+- Roller-dial patterns (7703→7700)
+
+**Real Data Golden Tests:**
+- Extract 10 representative aircraft from hour 00
+- Manually verify segment boundaries and incidents
+- Store as regression test fixtures
+- Validate quality gate decisions
+
+**Statistical Validation:**
+- Expected segments/day: 10K-20K range
+- Duration distribution: log-normal with median 1-2 hours
+- H3 coverage per segment: 50-200 cells at r5
+- Incident rate: 1-10 per 1000 flights (varies by region)
 
 ### 7.2 Integration Tests
 
@@ -324,11 +467,30 @@ interp_max_step_s = 60
 ```
 - All thresholds are surfaced centrally; changing them increments `data_version`.
 
-### 8.3 Logging
+### 8.3 Logging & Error Handling
 
-- Structured logs with `stage`, `dataset`, `partition`, `duration_ms`, `row_counts`.
-- **Fail fast**: pipeline aborts on errors (schema mismatch, extraction failure, write errors).
-- Metrics exported as counters/gauges if infra allows; otherwise JSON logs suffice.
+**Structured Logging:**
+- Required fields: `stage`, `dataset`, `partition`, `duration_ms`, `row_counts`
+- Quality metrics: `quality_gates_passed`, `quality_gates_failed`
+- Coverage metrics: `coverage_score`, `receiver_diversity`
+
+**Error Handling Strategy:**
+- **Logic errors**: Fail fast (schema mismatch, SQL errors, invalid data)
+- **Transient errors**: 3 retries with exponential backoff
+  - Network timeouts
+  - Rate limiting (respect retry-after headers)
+  - Connection drops
+- **Logging**: Every retry attempt logged with failure category
+
+**Retry Implementation Pattern:**
+```python
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=2, min=4, max=30),
+    retry=retry_if_exception_type(TransientError),
+    before_sleep=before_sleep_log(logger, logging.WARNING)
+)
+```
 
 ### 8.4 Security & Privacy
 
@@ -348,13 +510,50 @@ interp_max_step_s = 60
 
 ---
 
-## 10. Future Work (v2 Roadmap)
+## 10. Future Work
 
-- **Empirical‑Bayes** smoothing with beta‑binomial; show credible intervals in tooltips.
-- **Flight‑aware segmentation** via OpenSky flights archive; phase‑of‑flight inference; airport proximity context.
-- **Retries & backoff**, alerting; incremental rebuilds.
-- **Region‑specific registries** (FAA, CAA) to enrich aircraft type coverage.
-- **Time animation** and deltas vs prior month; per‑type small multiples.
+### 10.1 Lessons from 7-Day Prototype
+
+**To be documented during implementation:**
+- Validated assumptions about data volume and processing
+- Performance benchmarks for each stage
+- Quality gate effectiveness metrics
+- Coverage patterns and regional variations
+- Technical debt and optimization opportunities
+
+### 10.2 v2.0 Features (Priority Order)
+
+**Flight-aware Segmentation:**
+- Use `flights_data4` table for official flight segments
+- Phase-of-flight attribution (taxi, takeoff, cruise, approach, landing)
+- Airport proximity analysis (<50km from major airports)
+- More accurate incident-to-flight attribution
+
+**Empirical-Bayes Smoothing:**
+- Beta-binomial model for rate estimation
+- Credible intervals in all visualizations
+- Handles sparse data appropriately
+- User toggle between raw and smoothed rates
+
+**Cause Inference (from OpenSky report patterns):**
+- Duration analysis: Medical emergencies (longer) vs technical issues (shorter)
+- Aircraft type correlations with incident types
+- Time-of-day and day-of-week patterns
+- Weather correlation when data available
+
+### 10.3 v2.1 Enhancements
+
+**Regional Profiling:**
+- Country-level 7700 usage rate baselines
+- ATC zone boundary overlays
+- Procedural difference documentation
+- Normalization by regional practices
+
+**Advanced Analytics:**
+- Multi-period comparisons and trends
+- Anomaly detection for unusual spikes
+- Seasonal pattern analysis
+- Fleet-specific incident rates
 
 ---
 
