@@ -12,8 +12,12 @@ SET memory_limit = '{{ memory_limit }}';
 SET threads = {{ threads }};
 SET temp_directory = '{{ temp_directory }}';
 
+-- Enable progress bar for visibility
+SET enable_progress_bar = true;
+SET enable_progress_bar_print = true;
+
 COPY (
-    -- Load segments and extract emergency points
+    -- Load segments and extract emergency points (optimized single-pass)
     WITH emergency_segments AS (
         SELECT 
             segment_id,
@@ -22,58 +26,75 @@ COPY (
             end_time,
             duration_seconds,
             point_count,
-            -- Extract all emergency squawk points
+            -- Extract all emergency squawk points once
             list_filter(points, p -> p.squawk IN ('7500', '7600', '7700')) as emergency_points,
-            -- Separate by type for analysis
-            list_filter(points, p -> p.squawk = '7500') as hijack_points,
-            list_filter(points, p -> p.squawk = '7600') as radio_failure_points,
-            list_filter(points, p -> p.squawk = '7700') as general_emergency_points,
-            -- Get all 77XX codes for roller-dial detection
+            -- Get roller-dial codes from the already filtered emergency-related codes
             list_distinct(list_transform(
                 list_filter(points, p -> p.squawk LIKE '77%' AND p.squawk NOT IN ('7700', '7777')),
                 p -> p.squawk
             )) as roller_dial_codes
         FROM '{{ input_path }}'
-        WHERE list_count(list_filter(points, p -> p.squawk IN ('7500', '7600', '7700'))) > 0
+        -- Early filter: need at least 5 emergency points to possibly pass temporal gate
+        WHERE list_count(list_filter(points, p -> p.squawk IN ('7500', '7600', '7700'))) >= 5
     ),
     
-    -- Apply temporal quality gate: 5+ samples in 60 seconds
-    temporal_validation AS (
+    -- Categorize emergency points by type (second pass on smaller array)
+    categorized_segments AS (
+        SELECT 
+            segment_id,
+            icao24,
+            start_time,
+            end_time,
+            duration_seconds,
+            point_count,
+            emergency_points,
+            -- Filter the already-extracted emergency points
+            list_filter(emergency_points, p -> p.squawk = '7500') as hijack_points,
+            list_filter(emergency_points, p -> p.squawk = '7600') as radio_failure_points,
+            list_filter(emergency_points, p -> p.squawk = '7700') as general_emergency_points,
+            roller_dial_codes
+        FROM emergency_segments
+    ),
+    
+    -- Apply temporal quality gate: 5+ samples in 60 seconds (optimized)
+    temporal_checks AS (
         SELECT 
             segment_id,
             icao24,
             emergency_points,
+            roller_dial_codes,
+            -- Pre-compute temporal checks for each type
+            (list_count(hijack_points) >= 5 
+             AND hijack_points[5].time - hijack_points[1].time <= 60) as hijack_valid,
+            (list_count(radio_failure_points) >= 5
+             AND radio_failure_points[5].time - radio_failure_points[1].time <= 60) as radio_valid,
+            (list_count(general_emergency_points) >= 5
+             AND general_emergency_points[5].time - general_emergency_points[1].time <= 60) as general_valid,
             hijack_points,
             radio_failure_points,
-            general_emergency_points,
+            general_emergency_points
+        FROM categorized_segments
+    ),
+    temporal_validation AS (
+        SELECT
+            segment_id,
+            icao24,
+            emergency_points,
             roller_dial_codes,
-            -- Check each emergency type separately
+            -- Priority order: hijack > radio > general
             CASE 
-                WHEN list_count(hijack_points) >= 5 
-                     AND hijack_points[5].time - hijack_points[1].time <= 60
-                THEN '7500'
-                WHEN list_count(radio_failure_points) >= 5
-                     AND radio_failure_points[5].time - radio_failure_points[1].time <= 60
-                THEN '7600'
-                WHEN list_count(general_emergency_points) >= 5
-                     AND general_emergency_points[5].time - general_emergency_points[1].time <= 60
-                THEN '7700'
+                WHEN hijack_valid THEN '7500'
+                WHEN radio_valid THEN '7600'
+                WHEN general_valid THEN '7700'
                 ELSE NULL
             END as emergency_type,
-            -- Get the actual emergency points for the detected type
             CASE 
-                WHEN list_count(hijack_points) >= 5 
-                     AND hijack_points[5].time - hijack_points[1].time <= 60
-                THEN hijack_points
-                WHEN list_count(radio_failure_points) >= 5
-                     AND radio_failure_points[5].time - radio_failure_points[1].time <= 60
-                THEN radio_failure_points
-                WHEN list_count(general_emergency_points) >= 5
-                     AND general_emergency_points[5].time - general_emergency_points[1].time <= 60
-                THEN general_emergency_points
+                WHEN hijack_valid THEN hijack_points
+                WHEN radio_valid THEN radio_failure_points
+                WHEN general_valid THEN general_emergency_points
                 ELSE []
             END as validated_points
-        FROM emergency_segments
+        FROM temporal_checks
     ),
     
     -- Apply persistence quality gate: >45 seconds
@@ -97,8 +118,16 @@ COPY (
         WHERE emergency_type IS NOT NULL
     ),
     
-    -- Apply airborne quality gate: <30% on ground
+    -- Apply airborne quality gate: <30% on ground (optimized)
     airborne_validation AS (
+        WITH ground_stats AS (
+            SELECT 
+                *,
+                -- Compute ground count once
+                list_count(list_filter(validated_points, p -> p.onground)) as ground_count
+            FROM persistence_validation
+            WHERE passes_persistence = true
+        )
         SELECT 
             segment_id,
             icao24,
@@ -108,17 +137,12 @@ COPY (
             incident_end,
             persistence_seconds,
             roller_dial_codes,
-            list_count(list_filter(validated_points, p -> p.onground)) as ground_count,
-            ROUND(100.0 * list_count(list_filter(validated_points, p -> p.onground)) / 
-                  NULLIF(list_count(validated_points), 0), 2) as ground_percentage,
-            CASE 
-                WHEN list_count(list_filter(validated_points, p -> p.onground))::FLOAT / 
-                     NULLIF(list_count(validated_points), 0) < 0.3
-                THEN true
-                ELSE false
-            END as passes_airborne
-        FROM persistence_validation
-        WHERE passes_persistence = true
+            ground_count,
+            -- Use pre-computed ground_count
+            ROUND(100.0 * ground_count / NULLIF(sample_count, 0), 2) as ground_percentage,
+            -- Simple check using computed values
+            (ground_count::FLOAT / NULLIF(sample_count, 0)) < 0.3 as passes_airborne
+        FROM ground_stats
     ),
     
     -- Calculate confidence scores based on quality gates
@@ -183,18 +207,17 @@ COPY (
         WHERE confidence_score >= 50  -- Minimum confidence threshold
     ),
     
-    -- Apply debouncing: merge incidents within 15 minutes
-    with_gaps AS (
-        SELECT *,
-               LAG(end_time) OVER (PARTITION BY icao24, emergency_type ORDER BY start_time) as prev_end,
-               start_time - LAG(end_time) OVER (PARTITION BY icao24, emergency_type ORDER BY start_time) as gap_seconds
-        FROM incidents
-    ),
+    -- Apply debouncing: merge incidents within 15 minutes (optimized)
     with_groups AS (
+        WITH gap_calc AS (
+            SELECT *,
+                   start_time - LAG(end_time) OVER (PARTITION BY icao24, emergency_type ORDER BY start_time) as gap_seconds
+            FROM incidents
+        )
         SELECT *,
                SUM(CASE WHEN gap_seconds IS NULL OR gap_seconds > 900 THEN 1 ELSE 0 END) 
                    OVER (PARTITION BY icao24, emergency_type ORDER BY start_time) as group_id
-        FROM with_gaps
+        FROM gap_calc
     ),
     debounced AS (
         SELECT 

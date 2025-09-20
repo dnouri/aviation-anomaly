@@ -358,7 +358,7 @@ def test_sql_file_exists():
     content = sql_file.read_text()
     assert "WITH raw_data AS" in content
     assert "gaps_detected AS" in content
-    assert "segments_raw AS" in content
+    assert "segment_metrics AS" in content  # Changed from segments_raw to segment_metrics
     assert "COPY" in content
     assert "SET memory_limit" in content
 

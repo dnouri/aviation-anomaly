@@ -13,6 +13,10 @@ SET memory_limit = '{{ memory_limit }}';
 SET threads = {{ threads }};
 SET temp_directory = '{{ temp_directory }}';
 
+-- Enable progress bar for visibility
+SET enable_progress_bar = true;
+SET enable_progress_bar_print = true;
+
 -- Load H3 extension
 INSTALL h3;
 LOAD h3;

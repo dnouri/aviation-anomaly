@@ -1,6 +1,5 @@
--- Complete flight segmentation pipeline
--- Combines gap detection, distance calculation, and filtering in one query
--- Writes directly to Parquet file for streaming execution
+-- Optimized flight segmentation pipeline with reduced memory usage
+-- Calculates metrics before aggregating arrays to minimize memory pressure
 -- Parameters:
 --   {{input_path}}: Path to input Parquet file
 --   {{output_path}}: Path to output Parquet file  
@@ -13,6 +12,10 @@ SET memory_limit = '{{ memory_limit }}';
 SET threads = {{ threads }};
 SET temp_directory = '{{ temp_directory }}';
 SET max_temp_directory_size = '{{ max_temp_directory_size }}';
+
+-- Enable progress bar for visibility
+SET enable_progress_bar = true;
+SET enable_progress_bar_print = true;
 
 COPY (
     WITH raw_data AS (
@@ -27,15 +30,13 @@ COPY (
         FROM read_parquet('{{ input_path }}')
         WHERE lat IS NOT NULL 
           AND lon IS NOT NULL
-        ORDER BY icao24, time
     ),
     
-    -- Step 2: Calculate time gaps and assign segment IDs
+    -- Calculate gaps and segment IDs
     gaps_detected AS (
         SELECT 
             *,
             time - LAG(time) OVER (PARTITION BY icao24 ORDER BY time) AS time_gap,
-            -- New segment when gap exceeds threshold or first record
             CASE 
                 WHEN time - LAG(time) OVER (PARTITION BY icao24 ORDER BY time) >= {{ gap_threshold }}
                     OR LAG(time) OVER (PARTITION BY icao24 ORDER BY time) IS NULL
@@ -45,18 +46,28 @@ COPY (
         FROM raw_data
     ),
     
-    -- Step 3: Create cumulative segment IDs
-    with_segment_ids AS (
+    -- Assign segment IDs and calculate point-to-point distances
+    with_segment_metrics AS (
         SELECT 
             *,
             SUM(new_segment_flag) OVER (PARTITION BY icao24 ORDER BY time) AS segment_num,
-            -- Create unique segment ID
-            icao24 || '_' || CAST(SUM(new_segment_flag) OVER (PARTITION BY icao24 ORDER BY time) AS VARCHAR) AS segment_id
+            icao24 || '_' || CAST(SUM(new_segment_flag) OVER (PARTITION BY icao24 ORDER BY time) AS VARCHAR) AS segment_id,
+            -- Calculate distance to previous point
+            CASE 
+                WHEN LAG(time) OVER (PARTITION BY icao24 ORDER BY time) IS NULL 
+                    OR time - LAG(time) OVER (PARTITION BY icao24 ORDER BY time) >= {{ gap_threshold }}
+                THEN 0  -- First point of segment
+                ELSE 2 * 6371 * ASIN(SQRT(
+                    POWER(SIN(RADIANS(lat - LAG(lat) OVER (PARTITION BY icao24 ORDER BY time)) / 2), 2) +
+                    COS(RADIANS(LAG(lat) OVER (PARTITION BY icao24 ORDER BY time))) * COS(RADIANS(lat)) * 
+                    POWER(SIN(RADIANS(lon - LAG(lon) OVER (PARTITION BY icao24 ORDER BY time)) / 2), 2)
+                ))
+            END AS distance_to_prev
         FROM gaps_detected
     ),
     
-    -- Step 4: Aggregate points into segments
-    segments_raw AS (
+    -- Aggregate metrics WITHOUT creating arrays yet
+    segment_metrics AS (
         SELECT 
             segment_id,
             icao24,
@@ -64,44 +75,14 @@ COPY (
             MAX(time) AS end_time,
             MAX(time) - MIN(time) AS duration_seconds,
             COUNT(*) AS point_count,
-            ARRAY_AGG({
-                'time': time,
-                'lat': lat,
-                'lon': lon,
-                'squawk': squawk,
-                'onground': onground,
-                'alert': alert
-            }) AS points
-        FROM with_segment_ids
+            SUM(distance_to_prev) AS distance_km,
+            COUNT(*) FILTER (WHERE squawk IS NOT NULL AND squawk != '') AS squawk_count
+        FROM with_segment_metrics
         GROUP BY segment_id, icao24
     ),
     
-    -- Step 5: Calculate distances using Haversine formula
-    segments_with_distance AS (
-        SELECT 
-            segment_id,
-            icao24,
-            start_time,
-            end_time,
-            duration_seconds,
-            point_count,
-            points,
-            -- Calculate total distance by summing distances between consecutive points
-            (
-                SELECT COALESCE(SUM(
-                    2 * 6371 * ASIN(SQRT(
-                        POWER(SIN(RADIANS(points[i+1].lat - points[i].lat) / 2), 2) +
-                        COS(RADIANS(points[i].lat)) * COS(RADIANS(points[i+1].lat)) * 
-                        POWER(SIN(RADIANS(points[i+1].lon - points[i].lon) / 2), 2)
-                    ))
-                ), 0)
-                FROM GENERATE_SERIES(1, ARRAY_LENGTH(points) - 1) AS t(i)
-            ) AS distance_km
-        FROM segments_raw
-    ),
-    
-    -- Step 6: Filter segments based on duration OR distance criteria
-    filtered_segments AS (
+    -- Determine which segments to keep based on metrics
+    segments_to_keep AS (
         SELECT 
             segment_id,
             icao24,
@@ -110,8 +91,8 @@ COPY (
             duration_seconds,
             distance_km,
             point_count,
-            points,
-            -- Track why segment was kept for debugging
+            squawk_count,
+            CAST(squawk_count AS DOUBLE) / CAST(point_count AS DOUBLE) AS squawk_coverage_ratio,
             CASE 
                 WHEN duration_seconds >= {{ min_duration }} 
                      AND distance_km >= {{ min_distance }} THEN 'both'
@@ -119,33 +100,45 @@ COPY (
                 WHEN distance_km >= {{ min_distance }} THEN 'distance'
                 ELSE 'filtered'
             END AS keep_reason
-        FROM segments_with_distance
-        WHERE 
-            -- OR condition per requirements
-            duration_seconds >= {{ min_duration }}
-            OR distance_km >= {{ min_distance }}
+        FROM segment_metrics
+        WHERE duration_seconds >= {{ min_duration }}
+           OR distance_km >= {{ min_distance }}
     ),
     
-    -- Step 7: Calculate squawk coverage for quality metrics
+    -- Now aggregate points ONLY for segments we're keeping
     final_segments AS (
         SELECT 
-            segment_id,
-            icao24,
-            start_time,
-            end_time,
-            duration_seconds,
-            distance_km,
-            point_count,
-            -- Calculate squawk coverage ratio using list operations
-            list_count(list_filter(points, p -> p.squawk IS NOT NULL AND p.squawk != '')) AS squawk_count,
-            CASE 
-                WHEN point_count > 0 THEN 
-                    CAST(list_count(list_filter(points, p -> p.squawk IS NOT NULL AND p.squawk != '')) AS DOUBLE) / CAST(point_count AS DOUBLE)
-                ELSE 0.0
-            END AS squawk_coverage_ratio,
-            keep_reason,
-            points
-        FROM filtered_segments
+            k.segment_id,
+            k.icao24,
+            k.start_time,
+            k.end_time,
+            k.duration_seconds,
+            k.distance_km,
+            k.point_count,
+            k.squawk_count,
+            k.squawk_coverage_ratio,
+            k.keep_reason,
+            ARRAY_AGG({
+                'time': p.time,
+                'lat': p.lat,
+                'lon': p.lon,
+                'squawk': p.squawk,
+                'onground': p.onground,
+                'alert': p.alert
+            } ORDER BY p.time) AS points
+        FROM segments_to_keep k
+        JOIN with_segment_metrics p ON k.segment_id = p.segment_id
+        GROUP BY 
+            k.segment_id,
+            k.icao24,
+            k.start_time,
+            k.end_time,
+            k.duration_seconds,
+            k.distance_km,
+            k.point_count,
+            k.squawk_count,
+            k.squawk_coverage_ratio,
+            k.keep_reason
     )
     
     -- Final output

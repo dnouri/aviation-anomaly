@@ -26,7 +26,7 @@ good_coverage_min_points = 4
 
 [duckdb]
 # Memory limit for DuckDB operations
-memory_limit = "4GB"
+memory_limit = "12GB"
 # Number of threads for parallel processing
 threads = 4
 # Temporary directory for disk spilling
