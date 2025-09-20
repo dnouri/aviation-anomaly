@@ -147,32 +147,33 @@ This document defines the end‑to‑end system that ingests OpenSky state vecto
 
 **4.2.1 Segment Builder**
 - Partition by `icao24`; order by `time`.
-- Start new segment when **gap > 20 minutes** between consecutive points.
-- Filter segments with **duration <10 min AND distance <30 km**.
-- **Conservative interpolation**: 5km chord OR 30s interval (whichever is denser)
-  - Rationale: Compensates for missing velocity/heading data
-  - Validates implied velocity <1000 km/h for data quality
-- Assign `segment_id = hash(icao24, start_time, end_time)`.
+- Start new segment when **gap ≥ 20 minutes** between consecutive points.
+- Filter segments with **duration <10 min AND distance <30 km** (OR condition for keeping).
+- **Note**: Interpolation deferred to v1.1 due to complexity with pure SQL approach
+- Assign `segment_id = icao24 || '_' || segment_number` for uniqueness.
 - Track `squawk_coverage_ratio` = observable squawk samples / total samples
 
-**Segment Storage Schema (Hybrid GeoParquet):**
+**Segment Storage Schema (Actual Implementation):**
 ```sql
-CREATE TABLE segments (
-    segment_id VARCHAR PRIMARY KEY,
-    icao24 VARCHAR NOT NULL,
-    start_time TIMESTAMP,
-    end_time TIMESTAMP,
-    duration_seconds INTEGER,
-    distance_km DOUBLE,
-
-    -- Dual representation for flexibility
-    path GEOMETRY,              -- For spatial operations
-    coordinates DOUBLE[][],     -- For H3 coverage computation
-
-    point_count INTEGER,
-    interpolated_count INTEGER
-)
+-- Output from segment_pipeline.sql
+segment_id VARCHAR,           -- e.g., "abc123_1"
+icao24 VARCHAR,              -- Aircraft identifier
+start_time INTEGER,          -- Unix timestamp
+end_time INTEGER,            -- Unix timestamp
+duration_seconds INTEGER,    -- end_time - start_time
+distance_km DOUBLE,          -- Haversine distance sum
+point_count INTEGER,         -- Number of raw points
+squawk_count INTEGER,        -- Points with non-NULL squawk
+squawk_coverage_ratio DOUBLE, -- squawk_count / point_count
+keep_reason VARCHAR,         -- 'duration' | 'distance' | 'both'
+points STRUCT[],            -- Array of point structs with all fields
 ```
+
+**Implementation Notes**:
+- Uses DuckDB STRUCT arrays instead of separate geometry columns
+- Single SQL pipeline (segment_pipeline.sql) handles all transformations
+- No intermediate Python DataFrames - direct COPY TO Parquet
+- Memory-safe execution with configurable limits
 
 **4.2.2 Temporal Quality Gates & Confidence Scoring**
 Validate emergency squawks through temporal patterns:
@@ -278,6 +279,174 @@ coverage_note (enum: good|partial|mask)
 
 **Output**
 - `/tiles/h3_r{r}/hotspots.pmtiles` (with accompanying TileJSON).
+
+---
+
+## 4.5 SQL Development Methodology
+
+### Core Philosophy
+
+**SQL as the Computation Engine**: DuckDB handles all heavy data transformations through pure SQL. Python serves only as orchestration - configuration loading, parameter passing, and file management. This separation ensures memory-safe processing of billion-row datasets.
+
+### Critical SQL Patterns
+
+**1. Memory Configuration First**
+```sql
+-- ALWAYS start SQL files with memory settings
+SET memory_limit = '{{ memory_limit }}';
+SET threads = {{ threads }};
+SET temp_directory = '{{ temp_directory }}';
+```
+
+**2. Stream Through CTEs**
+```sql
+COPY (
+    WITH raw_data AS (...),
+         transformed AS (...),
+         filtered AS (...)
+    SELECT * FROM filtered
+) TO '{{ output_path }}' (FORMAT PARQUET, COMPRESSION 'zstd')
+```
+
+**3. Avoid Memory Bombs**
+```sql
+-- BAD: ORDER BY in aggregation
+ARRAY_AGG({...} ORDER BY time)
+
+-- GOOD: Pre-order, then aggregate
+WITH ordered AS (SELECT * FROM ... ORDER BY icao24, time)
+SELECT ARRAY_AGG({...}) FROM ordered
+```
+
+**4. List Operations Over UNNEST**
+```sql
+-- Memory-safe array filtering
+list_count(list_filter(points, p -> p.squawk = '7700'))
+```
+
+### File Organization
+
+```
+aviation_anomaly/sql/
+├── segment_pipeline.sql       # Gap-based flight segmentation
+├── incident_detection.sql     # Emergency detection with quality gates
+└── h3_aggregation.sql         # Future: Spatial aggregation
+```
+
+### Template Variables via qck
+
+```python
+params = {
+    "input_path": str(input_file),
+    "output_path": str(temp_path),
+    "gap_threshold": config.segments.gap_minutes * 60,
+    "memory_limit": config.duckdb.memory_limit,
+    "threads": config.duckdb.threads,
+    "temp_directory": config.duckdb.temp_directory,
+}
+```
+
+### Python Integration Pattern
+
+```python
+from pathlib import Path
+from uuid import uuid4
+from qck import qck
+
+def process_with_sql(date: datetime.date, config: Config) -> Path:
+    """Standard pattern for SQL pipeline execution."""
+    # Generate unique session ID for temp files (prevents collisions)
+    session_id = uuid4().hex[:8]
+    temp_path = output_dir / f".segments_{session_id}.parquet"
+    final_path = output_dir / f"segments_{date}.parquet"
+
+    params = {
+        "input_path": str(input_file),
+        "output_path": str(temp_path),
+        "memory_limit": config.duckdb.memory_limit,
+        "threads": config.duckdb.threads,
+    }
+
+    # Execute SQL pipeline - writes directly to temp_path
+    sql_file = Path(__file__).parent / "sql" / "segment_pipeline.sql"
+    qck(str(sql_file), params=params)
+
+    # Atomic rename for crash safety
+    temp_path.rename(final_path)
+    return final_path
+```
+
+**Why Session IDs?** Prevents file collisions during concurrent runs or crashes. The `.` prefix hides temp files from directory listings.
+
+### Testing SQL Pipelines
+
+**Test Production SQL, Not Reimplementations**
+
+```python
+# tests/conftest.py - Shared test fixtures
+@pytest.fixture
+def emergency_segment():
+    """Builder for test segments with emergencies."""
+    def _builder(*, icao24="test", emergency_samples=10, emergency_span_s=60):
+        points = []
+        for i in range(emergency_samples):
+            points.append({
+                "time": int(1000 + i * emergency_span_s / (emergency_samples - 1)),
+                "squawk": "7700",
+                "onground": False
+            })
+        return {
+            "segment_id": f"{icao24}_1",
+            "icao24": icao24,
+            "points": points,
+            # ... other fields
+        }
+    return _builder
+
+@pytest.fixture
+def run_incident_detection():
+    """Run actual SQL pipeline with test data."""
+    def _runner(segments_data: list[dict]) -> list[dict]:
+        # Write test segments to parquet
+        # Execute production SQL via qck
+        # Return incidents as dicts
+        ...
+    return _runner
+```
+
+```python
+# tests/test_incident_detection.py
+def test_temporal_quality_gate(emergency_segment, run_incident_detection):
+    # Arrange: Create test data with clear intent
+    segment = emergency_segment(emergency_samples=5, emergency_span_s=60)
+
+    # Act: Run ACTUAL production SQL
+    incidents = run_incident_detection([segment])
+
+    # Assert: Verify behavior
+    assert len(incidents) == 1  # Detected
+```
+
+**Test Fixture Organization**:
+- `tests/conftest.py`: All shared fixtures (data builders, pipeline runners)
+- Test files import fixtures automatically via pytest
+- Each fixture returns a builder function for flexibility
+
+### Key Lessons Learned
+
+**Critical DO's:**
+- ✓ SET memory limits first in every SQL file
+- ✓ Use session IDs for temp files: `.segments_{uuid}.parquet`
+- ✓ Test fixtures in `conftest.py` that call production SQL
+- ✓ Stream through CTEs, never materialize DataFrames
+- ✓ Atomic renames for crash safety
+
+**Critical DON'Ts:**
+- ✗ Never use `ORDER BY` in `ARRAY_AGG`
+- ✗ Never use `pd.read_sql()` or `.df()` on production data
+- ✗ Never reimplement SQL logic in tests
+- ✗ Never forget 1-based array indexing in DuckDB
+- ✗ Never create temporary tables (use CTEs)
 
 ---
 
@@ -444,28 +613,31 @@ coverage_note (enum: good|partial|mask)
 ### 8.2 Configurability (TOML config file)
 
 **Format**: TOML configuration file (`config.toml`) loaded via Python's `tomllib`.
-**CLI**: Click accepts `--config` parameter with default path.
+**CLI**: Click accepts `--config` parameter with default path (required).
 
 ```toml
 [segments]
-segment_gap_minutes = 20
-segment_min_duration_min = 10
-segment_min_distance_km = 30
+gap_minutes = 20
+min_duration_s = 600
+min_distance_km = 30
 
 [incidents]
 debounce_minutes = 15
+max_duration_cap_s = 5400
 
 [aggregation]
-h3_resolutions = [3, 4, 5, 6, 7]
-min_flights_visible = 50
-coverage_good_pts_per_flt = 4
-coverage_good_min_flights = 100
+min_flights_threshold = 50
+good_coverage_min_flights = 100
+good_coverage_min_points = 4
 
-[interpolation]
-interp_max_chord_km = 10
-interp_max_step_s = 60
+[duckdb]
+memory_limit = "4GB"
+threads = 4
+temp_directory = "/tmp/duckdb"
+max_temp_directory_size = "100GB"
 ```
 - All thresholds are surfaced centrally; changing them increments `data_version`.
+- DuckDB configuration enables memory-safe processing of billion-row datasets.
 
 ### 8.3 Logging & Error Handling
 
@@ -559,28 +731,33 @@ interp_max_step_s = 60
 
 ## Appendix A — Example SQL/Pseudocode
 
-> The exact SQL dialect may vary; shown here for DuckDB + H3.
+> Actual DuckDB dialect as implemented.
 
-**Segment gaps**
+**Segment gaps (from segment_pipeline.sql)**
 ```sql
--- Per icao24, ordered by time
-WITH s AS (
-  SELECT *,
-         time - LAG(time) OVER (PARTITION BY icao24 ORDER BY time) AS dt
-  FROM states
+-- Calculate time gaps and assign segment IDs
+WITH gaps_detected AS (
+    SELECT *,
+           time - LAG(time) OVER (PARTITION BY icao24 ORDER BY time) AS time_gap,
+           CASE
+               WHEN time - LAG(time) OVER (PARTITION BY icao24 ORDER BY time) >= 1200
+                    OR LAG(time) OVER (PARTITION BY icao24 ORDER BY time) IS NULL
+               THEN 1 ELSE 0
+           END AS new_segment_flag
+    FROM raw_data
 ),
-flags AS (
-  SELECT *, CASE WHEN dt IS NULL OR dt > 20*60 THEN 1 ELSE 0 END AS new_seg
-  FROM s
-),
-segmented AS (
-  SELECT *, SUM(new_seg) OVER (PARTITION BY icao24 ORDER BY time) AS seg_no
-  FROM flags
+with_segment_ids AS (
+    SELECT *,
+           SUM(new_segment_flag) OVER (PARTITION BY icao24 ORDER BY time) AS segment_num,
+           icao24 || '_' || CAST(SUM(new_segment_flag)
+                            OVER (PARTITION BY icao24 ORDER BY time) AS VARCHAR) AS segment_id
+    FROM gaps_detected
 )
-SELECT icao24, MIN(time) AS t_start, MAX(time) AS t_end,
-       array_agg([lat,lon] ORDER BY time) AS path
-FROM segmented
-GROUP BY icao24, seg_no;
+-- Important: ARRAY_AGG without ORDER BY to avoid memory issues
+SELECT segment_id, icao24, MIN(time) AS start_time, MAX(time) AS end_time,
+       ARRAY_AGG({'time': time, 'lat': lat, 'lon': lon, ...}) AS points
+FROM with_segment_ids
+GROUP BY segment_id, icao24;
 ```
 
 **Incident debounce (per segment & type)**

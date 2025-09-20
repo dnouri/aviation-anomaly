@@ -23,3 +23,13 @@ min_flights_threshold = 50
 good_coverage_min_flights = 100
 # Points needed for good coverage
 good_coverage_min_points = 4
+
+[duckdb]
+# Memory limit for DuckDB operations
+memory_limit = "4GB"
+# Number of threads for parallel processing
+threads = 4
+# Temporary directory for disk spilling
+temp_directory = "/home/daniel/scratch/aviation-anomaly/tmp_duckdb"
+# Maximum size for temporary files
+max_temp_directory_size = "100GB"

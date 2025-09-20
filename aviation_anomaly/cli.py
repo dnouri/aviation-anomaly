@@ -27,18 +27,18 @@ def main(ctx: click.Context, config: Path) -> None:
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config
 
-    # Try to load config if any subcommand is invoked (not just --help)
+    # Load config if any subcommand is invoked (not just --help)
     if ctx.invoked_subcommand is not None and not ctx.resilient_parsing:
-        if config.exists():
-            try:
-                ctx.obj["config"] = Config.from_file(config)
-            except ConfigError as e:
-                click.echo(f"Error loading config: {e}", err=True)
-                ctx.exit(1)
-        else:
-            # Config file not required for --help, but warn if missing for actual commands
-            if ctx.invoked_subcommand not in ["--help", None]:
-                click.echo(f"Warning: Config file not found at {config}. Using defaults where possible.", err=True)
+        if not config.exists():
+            click.echo(f"Error: Config file not found at {config}", err=True)
+            click.echo("Please create a config.toml file or specify one with --config", err=True)
+            ctx.exit(1)
+
+        try:
+            ctx.obj["config"] = Config.from_file(config)
+        except ConfigError as e:
+            click.echo(f"Error loading config: {e}", err=True)
+            ctx.exit(1)
 
 
 @main.command()
@@ -158,17 +158,269 @@ def extract(
 
 
 @main.command()
+@click.option(
+    "--date",
+    type=click.DateTime(["%Y-%m-%d"]),
+    help="Single date to segment (YYYY-MM-DD)",
+)
+@click.option(
+    "--from-date",
+    type=click.DateTime(["%Y-%m-%d"]),
+    help="Start date for range segmentation (YYYY-MM-DD)",
+)
+@click.option(
+    "--to-date",
+    type=click.DateTime(["%Y-%m-%d"]),
+    help="End date for range segmentation (YYYY-MM-DD)",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=Path("data/segments"),
+    help="Output directory for segment files",
+)
 @click.pass_context
-def segment(ctx: click.Context) -> None:
-    """Process flight segments with gap detection."""
-    click.echo("Segmentation not yet implemented")
+def segment(
+    ctx: click.Context,
+    date: datetime.datetime | None,
+    from_date: datetime.datetime | None,
+    to_date: datetime.datetime | None,
+    output_dir: Path,
+) -> None:
+    """Process flight segments with gap detection.
+
+    Detects flight segments based on time gaps, calculates distances,
+    and filters based on duration/distance criteria from config.toml.
+    """
+    from aviation_anomaly.logging import configure_logging
+    from aviation_anomaly.segmentation import segment_date_range, segment_day
+
+    configure_logging()
+
+    # Get config from context - guaranteed to exist after main() changes
+    config = ctx.obj["config"]
+
+    # Validate arguments (same pattern as extract)
+    if date and (from_date or to_date):
+        click.echo("Error: Use either --date or --from-date/--to-date, not both", err=True)
+        ctx.exit(1)
+
+    if not date and not (from_date and to_date):
+        click.echo("Error: Provide either --date or both --from-date and --to-date", err=True)
+        ctx.exit(1)
+
+    if date:
+        # Single date segmentation
+        segment_date = date.date()
+        click.echo(f"Segmenting flights for {segment_date}")
+        click.echo("Configuration:")
+        click.echo(f"  Gap threshold: {config.segments.gap_minutes} minutes")
+        click.echo(f"  Min duration: {config.segments.min_duration_s} seconds")
+        click.echo(f"  Min distance: {config.segments.min_distance_km} km")
+
+        try:
+            output_file = segment_day(segment_date, output_dir, config)
+        except FileNotFoundError as e:
+            click.echo(f"Error: {e}", err=True)
+            ctx.exit(1)
+
+        # Show stats
+        size_mb = output_file.stat().st_size / (1024 * 1024)
+
+        # Quick segment count
+        import duckdb
+
+        conn = duckdb.connect()
+        result = conn.execute(f"SELECT COUNT(*) FROM '{output_file}'").fetchone()
+        segment_count = result[0] if result else 0
+        conn.close()
+
+        click.echo(f"✓ Segmentation complete: {output_file}")
+        click.echo(f"  Size: {size_mb:.2f} MB")
+        click.echo(f"  Segments: {segment_count:,}")
+    else:
+        # Date range segmentation
+        assert from_date is not None and to_date is not None
+        start = from_date.date()
+        end = to_date.date()
+
+        click.echo(f"Segmenting flights from {start} to {end}")
+        click.echo("Configuration:")
+        click.echo(f"  Gap threshold: {config.segments.gap_minutes} minutes")
+        click.echo(f"  Min duration: {config.segments.min_duration_s} seconds")
+        click.echo(f"  Min distance: {config.segments.min_distance_km} km")
+
+        try:
+            output_files = segment_date_range(start, end, output_dir, config)
+        except FileNotFoundError as e:
+            click.echo(f"Error: {e}", err=True)
+            ctx.exit(1)
+
+        # Summary statistics
+        total_size = sum(f.stat().st_size for f in output_files) / (1024 * 1024)
+        click.echo(f"\n✓ Segmented {len(output_files)} files")
+        click.echo(f"  Total size: {total_size:.2f} MB")
+
+        for output_file in output_files:
+            size_mb = output_file.stat().st_size / (1024 * 1024)
+            click.echo(f"  {output_file.name}: {size_mb:.2f} MB")
 
 
 @main.command()
+@click.option(
+    "--date",
+    type=click.DateTime(["%Y-%m-%d"]),
+    help="Single date to detect incidents (YYYY-MM-DD)",
+)
+@click.option(
+    "--from-date",
+    type=click.DateTime(["%Y-%m-%d"]),
+    help="Start date for range detection (YYYY-MM-DD)",
+)
+@click.option(
+    "--to-date",
+    type=click.DateTime(["%Y-%m-%d"]),
+    help="End date for range detection (YYYY-MM-DD)",
+)
+@click.option(
+    "--segments-dir",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=Path("data/segments"),
+    help="Directory containing segment files",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=Path("data/incidents"),
+    help="Output directory for incident files",
+)
+@click.option(
+    "--stats",
+    is_flag=True,
+    default=False,
+    help="Show incident statistics after detection",
+)
 @click.pass_context
-def detect(ctx: click.Context) -> None:
-    """Detect emergency incidents from squawk codes."""
-    click.echo("Detection not yet implemented")
+def detect(
+    ctx: click.Context,
+    date: datetime.datetime | None,
+    from_date: datetime.datetime | None,
+    to_date: datetime.datetime | None,
+    segments_dir: Path,
+    output_dir: Path,
+    stats: bool,
+) -> None:
+    """Detect emergency incidents from flight segments with quality gates.
+
+    Applies temporal validation (5+ samples in 60s), persistence checks (>45s),
+    airborne validation (<30% ground), and confidence scoring to identify
+    genuine emergency squawks (7500/7600/7700).
+    """
+    from aviation_anomaly.incident_detection import (
+        analyze_incidents,
+        detect_incidents,
+        detect_incidents_range,
+    )
+    from aviation_anomaly.logging import configure_logging
+
+    configure_logging()
+
+    # Get config from context
+    config = ctx.obj["config"]
+
+    # Validate arguments (same pattern as other commands)
+    if date and (from_date or to_date):
+        click.echo("Error: Use either --date or --from-date/--to-date, not both", err=True)
+        ctx.exit(1)
+
+    if not date and not (from_date and to_date):
+        click.echo("Error: Provide either --date or both --from-date and --to-date", err=True)
+        ctx.exit(1)
+
+    if date:
+        # Single date detection
+        detect_date = date.date()
+        click.echo(f"Detecting incidents for {detect_date}")
+        click.echo("Quality Gates:")
+        click.echo("  ✓ Temporal: 5+ samples in 60 seconds")
+        click.echo("  ✓ Persistence: >45 seconds duration")
+        click.echo("  ✓ Airborne: <30% ground samples")
+        click.echo(f"  ✓ Debounce: {config.incidents.debounce_minutes} minutes")
+
+        try:
+            output_file = detect_incidents(detect_date, segments_dir, output_dir, config)
+        except FileNotFoundError as e:
+            click.echo(f"Error: {e}", err=True)
+            ctx.exit(1)
+
+        # Show basic stats
+        size_mb = output_file.stat().st_size / (1024 * 1024)
+
+        # Quick incident count
+        import duckdb
+
+        conn = duckdb.connect()
+        conn.execute("SET memory_limit = '1GB'")
+        result = conn.execute(
+            f"""
+            SELECT
+                COUNT(*) as total,
+                COUNT(DISTINCT icao24) as aircraft,
+                COUNT(CASE WHEN emergency_type = '7500' THEN 1 END) as hijack,
+                COUNT(CASE WHEN emergency_type = '7600' THEN 1 END) as radio_fail,
+                COUNT(CASE WHEN emergency_type = '7700' THEN 1 END) as general
+            FROM '{output_file}'
+        """
+        ).fetchone()
+        conn.close()
+
+        click.echo(f"✓ Detection complete: {output_file}")
+        click.echo(f"  Size: {size_mb:.2f} MB")
+
+        if result and result[0] > 0:
+            click.echo(f"  Incidents: {result[0]} ({result[1]} aircraft)")
+            click.echo(f"    7500 (Hijack): {result[2]}")
+            click.echo(f"    7600 (Radio Failure): {result[3]}")
+            click.echo(f"    7700 (General Emergency): {result[4]}")
+
+            if stats:
+                # Show detailed statistics
+                incident_stats = analyze_incidents(output_file)
+                click.echo("\nDetailed Statistics:")
+                click.echo(f"  Average duration: {incident_stats['avg_duration_seconds']:.1f} seconds")
+                click.echo(f"  Max duration: {incident_stats['max_duration_seconds']} seconds")
+                click.echo(f"  Average confidence: {incident_stats['avg_confidence']:.1f}")
+                click.echo(f"  High confidence: {incident_stats['high_confidence_count']}")
+                click.echo(f"  Roller-dial detected: {incident_stats['roller_dial_count']}")
+        else:
+            click.echo("  No incidents detected")
+    else:
+        # Date range detection
+        assert from_date is not None and to_date is not None
+        start = from_date.date()
+        end = to_date.date()
+
+        click.echo(f"Detecting incidents from {start} to {end}")
+        click.echo("Quality Gates:")
+        click.echo("  ✓ Temporal: 5+ samples in 60 seconds")
+        click.echo("  ✓ Persistence: >45 seconds duration")
+        click.echo("  ✓ Airborne: <30% ground samples")
+        click.echo(f"  ✓ Debounce: {config.incidents.debounce_minutes} minutes")
+
+        try:
+            output_files = detect_incidents_range(start, end, segments_dir, output_dir, config)
+        except Exception as e:
+            click.echo(f"Error: {e}", err=True)
+            ctx.exit(1)
+
+        # Summary statistics
+        total_size = sum(f.stat().st_size for f in output_files) / (1024 * 1024)
+        click.echo(f"\n✓ Detected incidents for {len(output_files)} days")
+        click.echo(f"  Total size: {total_size:.2f} MB")
+
+        for output_file in output_files:
+            size_mb = output_file.stat().st_size / (1024 * 1024)
+            click.echo(f"  {output_file.name}: {size_mb:.2f} MB")
 
 
 @main.command()

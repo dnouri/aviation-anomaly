@@ -53,12 +53,40 @@ class AggregationConfig(BaseModel):
         return v
 
 
+class DuckDBConfig(BaseModel):
+    """Configuration for DuckDB execution."""
+
+    memory_limit: str = Field(default="8GB", description="Memory limit for DuckDB operations")
+    threads: int = Field(default=4, description="Number of threads for parallel processing")
+    temp_directory: str = Field(default="/tmp/duckdb", description="Temp directory for disk spilling")
+    max_temp_directory_size: str = Field(default="100GB", description="Maximum size for temporary files")
+
+    @field_validator("memory_limit", "max_temp_directory_size")
+    @classmethod
+    def validate_size_format(cls, v: str) -> str:
+        """Ensure size is in valid format."""
+        import re
+
+        if not re.match(r"^\d+[KMGT]B$", v.upper()):
+            raise ValueError("Size must be like '8GB' or '512MB'")
+        return v.upper()
+
+    @field_validator("threads")
+    @classmethod
+    def validate_positive(cls, v: int) -> int:
+        """Ensure threads is positive."""
+        if v <= 0:
+            raise ValueError("Must be positive")
+        return v
+
+
 class Config(BaseModel):
     """Main configuration for Aviation Anomaly Tracker."""
 
     segments: SegmentConfig = Field(default_factory=SegmentConfig)
     incidents: IncidentConfig = Field(default_factory=IncidentConfig)
     aggregation: AggregationConfig = Field(default_factory=AggregationConfig)
+    duckdb: DuckDBConfig = Field(default_factory=DuckDBConfig)
 
     @classmethod
     def from_file(cls, path: Path | str) -> "Config":

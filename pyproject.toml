@@ -24,15 +24,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["aviation_anomaly"]
-exclude = [
-    "tests/",
-    "data/",
-    "research/",
-    "tmp/",
-    "*.md",
-    "Makefile",
-    ".env*",
-]
 
 [tool.uv]
 package = true
