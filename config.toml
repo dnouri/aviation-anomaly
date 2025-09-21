@@ -9,6 +9,8 @@ gap_minutes = 20
 min_duration_s = 600
 # Minimum segment distance in kilometers
 min_distance_km = 30.0
+# Number of aircraft to process per batch
+batch_size = 5000
 
 [incidents]
 # Minutes to debounce incidents (group closely-timed emergencies)
@@ -26,9 +28,9 @@ good_coverage_min_points = 4
 
 [duckdb]
 # Memory limit for DuckDB operations
-memory_limit = "12GB"
+memory_limit = "16GB"
 # Number of threads for parallel processing
-threads = 4
+threads = 2
 # Temporary directory for disk spilling
 temp_directory = "/home/daniel/scratch/aviation-anomaly/tmp_duckdb"
 # Maximum size for temporary files

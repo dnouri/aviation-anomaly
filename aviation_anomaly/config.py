@@ -12,8 +12,9 @@ class SegmentConfig(BaseModel):
     gap_minutes: int = Field(default=20, description="Minutes of gap to split segments")
     min_duration_s: int = Field(default=600, description="Minimum segment duration in seconds")
     min_distance_km: float = Field(default=30.0, description="Minimum segment distance in km")
+    batch_size: int = Field(default=5000, description="Number of aircraft to process per batch")
 
-    @field_validator("gap_minutes", "min_duration_s")
+    @field_validator("gap_minutes", "min_duration_s", "batch_size")
     @classmethod
     def validate_positive(cls, v: int) -> int:
         """Ensure values are positive."""

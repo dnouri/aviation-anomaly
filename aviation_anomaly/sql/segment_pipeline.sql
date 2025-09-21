@@ -1,26 +1,44 @@
--- Optimized flight segmentation pipeline with reduced memory usage
--- Calculates metrics before aggregating arrays to minimize memory pressure
+-- Optimized flight segmentation pipeline with automatic batching
+-- Processes a subset of aircraft to control memory usage
 -- Parameters:
 --   {{input_path}}: Path to input Parquet file
 --   {{output_path}}: Path to output Parquet file  
+--   {{batch_size}}: Number of aircraft per batch (e.g., 100)
+--   {{batch_number}}: Which batch to process (0-based)
 --   {{gap_threshold}}: Gap threshold in seconds (e.g., 1200 for 20 minutes)
 --   {{min_duration}}: Minimum duration in seconds (e.g., 600)
 --   {{min_distance}}: Minimum distance in km (e.g., 30)
--- Note: DuckDB settings are configured on the connection
+-- Note: DuckDB settings are configured on the connection, not in this query
 
 COPY (
-    WITH raw_data AS (
-        SELECT 
-            icao24,
-            time,
-            lat,
-            lon,
-            squawk,
-            onground,
-            alert
+    -- Determine which aircraft belong to this batch
+    WITH distinct_aircraft AS (
+        SELECT DISTINCT icao24
         FROM read_parquet('{{ input_path }}')
-        WHERE lat IS NOT NULL 
-          AND lon IS NOT NULL
+    ),
+    aircraft_batches AS (
+        SELECT icao24,
+               ((ROW_NUMBER() OVER (ORDER BY icao24) - 1) / {{ batch_size }})::INTEGER as batch_id
+        FROM distinct_aircraft
+    ),
+    current_batch AS (
+        SELECT icao24 
+        FROM aircraft_batches
+        WHERE batch_id = {{ batch_number }}
+    ),
+    raw_data AS (
+        SELECT 
+            r.icao24,
+            r.time,
+            r.lat,
+            r.lon,
+            r.squawk,
+            r.onground,
+            r.alert
+        FROM read_parquet('{{ input_path }}') r
+        WHERE r.icao24 IN (SELECT icao24 FROM current_batch)
+          AND r.lat IS NOT NULL 
+          AND r.lon IS NOT NULL
     ),
     
     -- Calculate gaps and segment IDs
@@ -57,7 +75,7 @@ COPY (
         FROM gaps_detected
     ),
     
-    -- Aggregate metrics WITHOUT creating arrays yet
+    -- Aggregate metrics before array creation for memory efficiency
     segment_metrics AS (
         SELECT 
             segment_id,
@@ -96,7 +114,7 @@ COPY (
            OR distance_km >= {{ min_distance }}
     ),
     
-    -- Now aggregate points ONLY for segments we're keeping
+    -- Aggregate points for kept segments
     final_segments AS (
         SELECT 
             k.segment_id,
@@ -135,5 +153,4 @@ COPY (
     -- Final output
     SELECT * 
     FROM final_segments
-    ORDER BY icao24, start_time
 ) TO '{{ output_path }}' (FORMAT PARQUET, COMPRESSION 'zstd')
