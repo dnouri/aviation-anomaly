@@ -7,6 +7,7 @@ import duckdb
 from qck import qck
 
 from aviation_anomaly.config import Config
+from aviation_anomaly.data_access import create_configured_connection
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ def compute_h3_coverage(
     output_file: Path,
     resolution: int,
     config: Config | None = None,
+    connection: duckdb.DuckDBPyConnection | None = None,
 ) -> None:
     """
     Compute H3 coverage from flight segments at a single resolution.
@@ -25,6 +27,7 @@ def compute_h3_coverage(
         output_file: Path to output aggregation Parquet file
         resolution: H3 resolution (3-7)
         config: Configuration object (optional)
+        connection: DuckDB connection to reuse (optional)
     """
     if not segment_file.exists():
         raise FileNotFoundError(f"Segment file not found: {segment_file}")
@@ -43,24 +46,23 @@ def compute_h3_coverage(
         "segment_file": str(segment_file),
         "output_file": str(output_file),
         "resolution": resolution,
-        "memory_limit": config.duckdb.memory_limit,
-        "threads": config.duckdb.threads,
-        "temp_directory": config.duckdb.temp_directory,
     }
 
     logger.info(f"Computing H3 coverage at resolution {resolution}")
     logger.info(f"Input: {segment_file}")
     logger.info(f"Output: {output_file}")
 
-    # Ensure h3 extension is loaded
-    conn = duckdb.connect(":memory:")
-    conn.execute("INSTALL h3")
-    conn.execute("LOAD h3")
-    conn.close()
-
     # Execute SQL pipeline
     try:
-        qck(str(sql_path), params=params)
+        if connection:
+            qck(str(sql_path), params=params, connection=connection)
+        else:
+            # Create connection with H3 extension for single use
+            conn = create_configured_connection(config, extensions=["h3"])
+            try:
+                qck(str(sql_path), params=params, connection=conn)
+            finally:
+                conn.close()
         logger.info(f"H3 aggregation complete: {output_file}")
     except Exception as e:
         logger.error(f"H3 aggregation failed: {e}")
@@ -88,13 +90,21 @@ def compute_h3_coverage_multi_resolution(
     if resolutions is None:
         resolutions = [3, 4, 5, 6, 7]
 
+    if config is None:
+        config = Config.from_file(Path("config.toml"))
+
     output_dir.mkdir(parents=True, exist_ok=True)
     results = {}
 
-    for res in resolutions:
-        output_file = output_dir / f"h3_coverage_r{res}.parquet"
-        compute_h3_coverage(segment_file, output_file, res, config)
-        results[res] = output_file
+    # Create single connection for all resolutions
+    conn = create_configured_connection(config, extensions=["h3"])
+    try:
+        for res in resolutions:
+            output_file = output_dir / f"h3_coverage_r{res}.parquet"
+            compute_h3_coverage(segment_file, output_file, res, config, connection=conn)
+            results[res] = output_file
+    finally:
+        conn.close()
 
     return results
 
@@ -120,10 +130,7 @@ def compute_coverage_metrics(
     if config is None:
         config = Config.from_file(Path("config.toml"))
 
-    conn = duckdb.connect(":memory:")
-    conn.execute("INSTALL h3")
-    conn.execute("LOAD h3")
-    conn.execute(f"SET memory_limit = '{config.duckdb.memory_limit}'")
+    conn = create_configured_connection(config, extensions=["h3"])
 
     # Compute coverage metrics with points-per-flight
     conn.execute(f"""
@@ -218,10 +225,7 @@ def compute_dual_incident_metrics(
     if config is None:
         config = Config.from_file(Path("config.toml"))
 
-    conn = duckdb.connect(":memory:")
-    conn.execute("INSTALL h3; LOAD h3")
-    conn.execute(f"SET memory_limit = '{config.duckdb.memory_limit}'")
-    conn.execute(f"SET threads = {config.duckdb.threads}")
+    conn = create_configured_connection(config, extensions=["h3"])
 
     # Compute dual metrics
     conn.execute(f"""
@@ -336,9 +340,7 @@ def aggregate_incidents_by_type(
     if config is None:
         config = Config.from_file(Path("config.toml"))
 
-    conn = duckdb.connect(":memory:")
-    conn.execute("INSTALL h3; LOAD h3")
-    conn.execute(f"SET memory_limit = '{config.duckdb.memory_limit}'")
+    conn = create_configured_connection(config, extensions=["h3"])
 
     # Aggregate by squawk type
     conn.execute(f"""
@@ -401,8 +403,7 @@ def apply_visibility_thresholds(
     if config is None:
         config = Config.from_file(Path("config.toml"))
 
-    conn = duckdb.connect(":memory:")
-    conn.execute(f"SET memory_limit = '{config.duckdb.memory_limit}'")
+    conn = create_configured_connection(config)
 
     # Apply threshold filtering
     conn.execute(f"""

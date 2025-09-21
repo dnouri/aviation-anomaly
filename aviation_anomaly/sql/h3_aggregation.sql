@@ -4,22 +4,7 @@
 --   {{segment_file}}: Path to segment Parquet file
 --   {{output_file}}: Path to output aggregation Parquet file
 --   {{resolution}}: H3 resolution (3-7)
---   {{memory_limit}}: DuckDB memory limit
---   {{threads}}: Number of threads
---   {{temp_directory}}: Temporary directory for spilling
-
--- Configure memory limits for safe execution
-SET memory_limit = '{{ memory_limit }}';
-SET threads = {{ threads }};
-SET temp_directory = '{{ temp_directory }}';
-
--- Enable progress bar for visibility
-SET enable_progress_bar = true;
-SET enable_progress_bar_print = true;
-
--- Load H3 extension
-INSTALL h3;
-LOAD h3;
+-- Note: DuckDB settings and H3 extension are configured on the connection
 
 COPY (
     WITH segment_cells AS (

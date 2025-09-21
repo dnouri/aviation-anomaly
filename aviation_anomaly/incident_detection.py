@@ -11,6 +11,7 @@ from uuid import uuid4
 from qck import qck
 
 from aviation_anomaly.config import Config
+from aviation_anomaly.data_access import create_configured_connection
 from aviation_anomaly.logging import log_operation
 
 logger = logging.getLogger(__name__)
@@ -60,32 +61,35 @@ def detect_incidents(date: datetime.date, segments_dir: Path, output_dir: Path, 
     final_path = output_dir / f"incidents_{date}.parquet"
     temp_path = output_dir / f".incidents_{session_id}.parquet"
 
-    # SQL parameters from config
+    # SQL parameters
     params = {
         "input_path": str(input_file),
         "output_path": str(temp_path),
         "processing_date": str(date),
-        # DuckDB memory configuration
-        "memory_limit": config.duckdb.memory_limit,
-        "threads": config.duckdb.threads,
-        "temp_directory": config.duckdb.temp_directory,
     }
 
-    with log_operation(f"detect_incidents_{date}", logger):
-        logger.info(f"Processing segments from {input_file}")
-        logger.info(
-            "Quality gates: 5+ samples in 60s, >45s persistence, <30% ground, "
-            f"debounce {config.incidents.debounce_minutes}min"
-        )
-        logger.info(f"DuckDB config: memory={config.duckdb.memory_limit}, threads={config.duckdb.threads}")
+    # Create configured DuckDB connection
+    conn = create_configured_connection(config)
 
-        # Execute the SQL query - writes directly to temp_path via COPY TO
-        sql_file = Path(__file__).parent / "sql" / "incident_detection.sql"
-        qck(str(sql_file), params=params)
+    try:
+        with log_operation(f"detect_incidents_{date}", logger):
+            logger.info(f"Processing segments from {input_file}")
+            logger.info(
+                "Quality gates: 5+ samples in 60s, >45s persistence, <30% ground, "
+                f"debounce {config.incidents.debounce_minutes}min"
+            )
+            logger.info(f"DuckDB config: memory={config.duckdb.memory_limit}, threads={config.duckdb.threads}")
 
-        # Atomic rename
-        temp_path.rename(final_path)
-        logger.info(f"Incidents written to {final_path}")
+            # Execute the SQL query - writes directly to temp_path via COPY TO
+            sql_file = Path(__file__).parent / "sql" / "incident_detection.sql"
+            qck(str(sql_file), params=params, connection=conn)
+
+            # Atomic rename
+            temp_path.rename(final_path)
+            logger.info(f"Incidents written to {final_path}")
+
+    finally:
+        conn.close()
 
     return final_path
 
@@ -94,6 +98,10 @@ def detect_incidents_range(
     start: datetime.date, end: datetime.date, segments_dir: Path, output_dir: Path, config: Config
 ) -> list[Path]:
     """Detect incidents for multiple days.
+
+    Each day is processed independently with its own DuckDB connection.
+    This ensures clean isolation between days and matches the pattern
+    used in segmentation.
 
     Args:
         start: Start date (inclusive)
@@ -124,19 +132,20 @@ def detect_incidents_range(
     return results
 
 
-def analyze_incidents(incident_file: Path) -> dict:
+def analyze_incidents(incident_file: Path, config: Config | None = None) -> dict:
     """Analyze detected incidents for statistics.
 
     Args:
         incident_file: Path to incident parquet file
+        config: Optional configuration object for DuckDB settings
 
     Returns:
         Dictionary with incident statistics
     """
-    import duckdb
+    if config is None:
+        config = Config()
 
-    conn = duckdb.connect()
-    conn.execute("SET memory_limit = '1GB'")
+    conn = create_configured_connection(config)
 
     # Get basic statistics
     stats = conn.execute(

@@ -1,10 +1,11 @@
-"""Tests for Trino query connection."""
+"""Tests for data access utilities including Trino queries and DuckDB configuration."""
 
 import os
 
 import pytest
 
-from aviation_anomaly.data_access import TrinoQueryEngine
+from aviation_anomaly.config import Config
+from aviation_anomaly.data_access import TrinoQueryEngine, create_configured_connection
 
 
 def test_query_engine_requires_credentials(monkeypatch, tmp_path) -> None:
@@ -148,3 +149,74 @@ def test_real_opensky_connection() -> None:
 
     finally:
         engine.close()
+
+
+def test_create_configured_connection_applies_settings():
+    """Test that create_configured_connection applies all settings from config."""
+    config = Config()
+    config.duckdb.memory_limit = "2GB"
+    config.duckdb.threads = 4
+    config.duckdb.temp_directory = "/tmp/test_duckdb"
+    config.duckdb.max_temp_directory_size = "10GB"
+
+    conn = create_configured_connection(config)
+
+    try:
+        # Verify connection is valid by running a simple query
+        result = conn.execute("SELECT 1").fetchone()
+        assert result is not None
+        assert result[0] == 1
+
+        # Verify settings were applied by checking the configuration
+        memory_result = conn.execute("SELECT current_setting('memory_limit')").fetchone()
+        threads_result = conn.execute("SELECT current_setting('threads')").fetchone()
+        temp_result = conn.execute("SELECT current_setting('temp_directory')").fetchone()
+
+        assert memory_result is not None
+        assert threads_result is not None
+        assert temp_result is not None
+
+        memory_limit = memory_result[0]
+        threads = threads_result[0]
+        temp_directory = temp_result[0]
+
+        # DuckDB formats memory values (2GB becomes "1.8 GiB" or similar)
+        # Just verify it's not the default and has GiB unit
+        assert "GiB" in memory_limit or "GB" in memory_limit
+        assert threads == 4  # threads is returned as integer
+        assert temp_directory == "/tmp/test_duckdb"
+
+    finally:
+        conn.close()
+
+
+def test_create_configured_connection_with_extensions():
+    """Test that connection can be extended with additional extensions."""
+    config = Config()
+
+    conn = create_configured_connection(config, extensions=["httpfs"])
+
+    try:
+        # Verify httpfs extension is loaded by checking if its functions exist
+        result = conn.execute("SELECT * FROM duckdb_extensions() WHERE extension_name = 'httpfs'").fetchone()
+        assert result is not None
+        assert result[1] is True  # loaded column
+
+    finally:
+        conn.close()
+
+
+def test_create_configured_connection_progress_bar_enabled():
+    """Test that progress bar is enabled by default."""
+    config = Config()
+
+    conn = create_configured_connection(config)
+
+    try:
+        # Check that progress bar settings are enabled
+        result = conn.execute("SELECT current_setting('enable_progress_bar')").fetchone()
+        assert result is not None
+        assert result[0] is True
+
+    finally:
+        conn.close()

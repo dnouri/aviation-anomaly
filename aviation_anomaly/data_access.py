@@ -1,4 +1,4 @@
-"""Data access layer for OpenSky Trino queries."""
+"""Data access layer for OpenSky Trino queries and DuckDB configuration."""
 
 from typing import Any
 
@@ -7,6 +7,7 @@ from trino.auth import JWTAuthentication
 from trino.dbapi import Connection, connect
 
 from aviation_anomaly.auth import get_opensky_token
+from aviation_anomaly.config import Config
 
 
 class TrinoQueryEngine:
@@ -91,3 +92,34 @@ class TrinoQueryEngine:
         if self._connection:
             self._connection.close()
             self._connection = None
+
+
+def create_configured_connection(config: Config, extensions: list[str] | None = None) -> duckdb.DuckDBPyConnection:
+    """Create a DuckDB connection with standard configuration.
+
+    Args:
+        config: Configuration object with DuckDB settings
+        extensions: Optional list of DuckDB extensions to load
+
+    Returns:
+        Configured DuckDB connection
+    """
+    conn = duckdb.connect()
+
+    # Apply configuration from config object
+    conn.execute(f"SET memory_limit = '{config.duckdb.memory_limit}'")
+    conn.execute(f"SET threads = {config.duckdb.threads}")
+    conn.execute(f"SET temp_directory = '{config.duckdb.temp_directory}'")
+    conn.execute(f"SET max_temp_directory_size = '{config.duckdb.max_temp_directory_size}'")
+
+    # Enable progress bar for visibility
+    conn.execute("SET enable_progress_bar = true")
+    conn.execute("SET enable_progress_bar_print = true")
+
+    # Load any requested extensions
+    if extensions:
+        for ext in extensions:
+            conn.execute(f"INSTALL {ext}")
+            conn.execute(f"LOAD {ext}")
+
+    return conn

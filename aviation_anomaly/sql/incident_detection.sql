@@ -7,15 +7,6 @@
 -- 3. Airborne: <30% of samples on ground
 -- 4. Roller-dial detection for confidence scoring
 
--- CRITICAL: Set memory constraints first (SPEC.md requirement)
-SET memory_limit = '{{ memory_limit }}';
-SET threads = {{ threads }};
-SET temp_directory = '{{ temp_directory }}';
-
--- Enable progress bar for visibility
-SET enable_progress_bar = true;
-SET enable_progress_bar_print = true;
-
 COPY (
     -- Load segments and extract emergency points (optimized single-pass)
     WITH emergency_segments AS (

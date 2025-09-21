@@ -11,6 +11,7 @@ from uuid import uuid4
 from qck import qck
 
 from aviation_anomaly.config import Config
+from aviation_anomaly.data_access import create_configured_connection
 from aviation_anomaly.logging import log_operation
 
 logger = logging.getLogger(__name__)
@@ -52,36 +53,38 @@ def segment_day(date: datetime.date, output_dir: Path, config: Config) -> Path:
     final_path = output_dir / f"segments_{date}.parquet"
     temp_path = output_dir / f".segments_{session_id}.parquet"
 
-    # SQL parameters from config
+    # SQL parameters (no DuckDB config if using connection)
     params = {
         "input_path": str(input_file),
         "output_path": str(temp_path),
         "gap_threshold": config.segments.gap_minutes * 60,
         "min_duration": config.segments.min_duration_s,
         "min_distance": config.segments.min_distance_km,
-        # DuckDB memory configuration
-        "memory_limit": config.duckdb.memory_limit,
-        "threads": config.duckdb.threads,
-        "temp_directory": config.duckdb.temp_directory,
-        "max_temp_directory_size": config.duckdb.max_temp_directory_size,
     }
 
-    with log_operation(f"segment_{date}", logger):
-        logger.info(f"Processing {input_file}")
-        logger.info(
-            f"Parameters: gap={config.segments.gap_minutes}min, "
-            f"duration≥{config.segments.min_duration_s}s, "
-            f"distance≥{config.segments.min_distance_km}km"
-        )
-        logger.info(f"DuckDB config: memory={config.duckdb.memory_limit}, threads={config.duckdb.threads}")
+    # Create configured DuckDB connection
+    conn = create_configured_connection(config)
 
-        # Execute the SQL query - writes directly to temp_path via COPY TO
-        sql_file = Path(__file__).parent / "sql" / "segment_pipeline.sql"
-        qck(str(sql_file), params=params)
+    try:
+        with log_operation(f"segment_{date}", logger):
+            logger.info(f"Processing {input_file}")
+            logger.info(
+                f"Parameters: gap={config.segments.gap_minutes}min, "
+                f"duration≥{config.segments.min_duration_s}s, "
+                f"distance≥{config.segments.min_distance_km}km"
+            )
+            logger.info(f"DuckDB config: memory={config.duckdb.memory_limit}, threads={config.duckdb.threads}")
 
-        # Atomic rename
-        temp_path.rename(final_path)
-        logger.info(f"Segments written to {final_path}")
+            # Execute the SQL query - writes directly to temp_path via COPY TO
+            sql_file = Path(__file__).parent / "sql" / "segment_pipeline.sql"
+            qck(str(sql_file), params=params, connection=conn)
+
+            # Atomic rename
+            temp_path.rename(final_path)
+            logger.info(f"Segments written to {final_path}")
+
+    finally:
+        conn.close()
 
     return final_path
 

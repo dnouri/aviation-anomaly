@@ -6,16 +6,7 @@
 --   {{gap_threshold}}: Gap threshold in seconds (e.g., 1200 for 20 minutes)
 --   {{min_duration}}: Minimum duration in seconds (e.g., 600)
 --   {{min_distance}}: Minimum distance in km (e.g., 30)
-
--- Configure memory limits for safe execution
-SET memory_limit = '{{ memory_limit }}';
-SET threads = {{ threads }};
-SET temp_directory = '{{ temp_directory }}';
-SET max_temp_directory_size = '{{ max_temp_directory_size }}';
-
--- Enable progress bar for visibility
-SET enable_progress_bar = true;
-SET enable_progress_bar_print = true;
+-- Note: DuckDB settings are configured on the connection
 
 COPY (
     WITH raw_data AS (

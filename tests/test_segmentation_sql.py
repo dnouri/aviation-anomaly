@@ -360,7 +360,6 @@ def test_sql_file_exists():
     assert "gaps_detected AS" in content
     assert "segment_metrics AS" in content  # Changed from segments_raw to segment_metrics
     assert "COPY" in content
-    assert "SET memory_limit" in content
 
 
 @pytest.mark.parametrize(
