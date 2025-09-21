@@ -1,9 +1,9 @@
--- Optimized flight segmentation pipeline with automatic batching
--- Processes a subset of aircraft to control memory usage
+-- Optimized flight segmentation pipeline with volume-based batching
+-- Processes a subset of aircraft to control memory usage, with batches balanced by data points
 -- Parameters:
 --   {{input_path}}: Path to input Parquet file
 --   {{output_path}}: Path to output Parquet file  
---   {{batch_size}}: Number of aircraft per batch (e.g., 100)
+--   {{batch_size}}: Target number of aircraft per batch (e.g., 100) - actual batches balanced by data volume
 --   {{batch_number}}: Which batch to process (0-based)
 --   {{gap_threshold}}: Gap threshold in seconds (e.g., 1200 for 20 minutes)
 --   {{min_duration}}: Minimum duration in seconds (e.g., 600)
@@ -11,15 +11,40 @@
 -- Note: DuckDB settings are configured on the connection, not in this query
 
 COPY (
-    -- Determine which aircraft belong to this batch
-    WITH distinct_aircraft AS (
-        SELECT DISTINCT icao24
+    -- Determine which aircraft belong to this batch using volume-based batching
+    WITH aircraft_point_counts AS (
+        SELECT 
+            icao24,
+            COUNT(*) as point_count
         FROM read_parquet('{{ input_path }}')
+        WHERE lat IS NOT NULL AND lon IS NOT NULL
+        GROUP BY icao24
+    ),
+    batch_parameters AS (
+        SELECT 
+            COUNT(*) as total_aircraft,
+            SUM(point_count) as total_points,
+            GREATEST(1, CAST(CEIL(CAST(COUNT(*) AS DOUBLE) / {{ batch_size }}) AS INTEGER)) as num_batches
+        FROM aircraft_point_counts
+    ),
+    aircraft_with_cumulative AS (
+        SELECT 
+            a.icao24,
+            a.point_count,
+            SUM(a.point_count) OVER (ORDER BY a.icao24 ROWS UNBOUNDED PRECEDING) as cumulative_points,
+            p.num_batches,
+            CAST(p.total_points AS DOUBLE) / CAST(p.num_batches AS DOUBLE) as target_points_per_batch
+        FROM aircraft_point_counts a
+        CROSS JOIN batch_parameters p
     ),
     aircraft_batches AS (
-        SELECT icao24,
-               ((ROW_NUMBER() OVER (ORDER BY icao24) - 1) / {{ batch_size }})::INTEGER as batch_id
-        FROM distinct_aircraft
+        SELECT 
+            icao24,
+            LEAST(
+                FLOOR((cumulative_points - 1) / target_points_per_batch),
+                num_batches - 1
+            ) as batch_id
+        FROM aircraft_with_cumulative
     ),
     current_batch AS (
         SELECT icao24 

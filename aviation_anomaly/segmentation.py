@@ -85,11 +85,13 @@ def segment_day(date: datetime.date, output_dir: Path, config: Config) -> Path:
         logger.info(f"DuckDB config: memory={config.duckdb.memory_limit}, threads={config.duckdb.threads}")
 
         # Get aircraft count to determine number of batches
+        # Note: The SQL now uses volume-based batching, so actual batch distribution
+        # will be balanced by data points, not just aircraft count
         aircraft_count = get_aircraft_count(input_file, config)
         if aircraft_count == 0:
             raise RuntimeError("No aircraft found in input data")
         num_batches = (aircraft_count + config.segments.batch_size - 1) // config.segments.batch_size
-        logger.info(f"Found {aircraft_count} aircraft, processing in {num_batches} batches")
+        logger.info(f"Found {aircraft_count} aircraft, processing in {num_batches} volume-balanced batches")
 
         # Create configured DuckDB connection
         conn = create_configured_connection(config)
@@ -136,18 +138,39 @@ def segment_day(date: datetime.date, output_dir: Path, config: Config) -> Path:
         # Combine all batch files into final output
         logger.info(f"Combining {len(batch_files)} batch files")
 
-        # Create list of batch file paths for DuckDB
-        batch_paths = [str(bf) for bf in batch_files]
-        batch_list = "[" + ", ".join(f"'{p}'" for p in batch_paths) + "]"
+        # Build UNION ALL BY NAME query for robust schema handling
+        # This approach handles any minor schema differences between batches
+        union_parts = [f"SELECT * FROM read_parquet('{bf}')" for bf in batch_files]
+        union_query = " UNION ALL BY NAME ".join(union_parts)
 
-        # Create new connection for combining (separate from batch processing)
+        # Create new connection for combining with optimized settings
         combine_conn = create_configured_connection(config)
+        # Additional optimization for large combines
+        combine_conn.execute("SET preserve_insertion_order = false")
+
+        # Two-pass approach to avoid OOM: combine first, then sort
+        unsorted_path = output_dir / f".unsorted_{date}.parquet"
+
+        # Step 1: Combine all batches without ORDER BY (memory-efficient)
+        logger.info("Pass 1: Combining batch files using UNION ALL BY NAME...")
         combine_conn.execute(f"""
             COPY (
-                SELECT * FROM read_parquet({batch_list})
+                {union_query}
+            ) TO '{unsorted_path}' (FORMAT PARQUET, COMPRESSION 'zstd')
+        """)
+
+        # Step 2: Sort the combined file (separate memory allocation)
+        logger.info("Pass 2: Sorting combined output by icao24 and start_time...")
+        combine_conn.execute(f"""
+            COPY (
+                SELECT * FROM read_parquet('{unsorted_path}')
                 ORDER BY icao24, start_time
             ) TO '{final_path}' (FORMAT PARQUET, COMPRESSION 'zstd')
         """)
+        # Clean up unsorted temp file
+        unsorted_path.unlink()
+        logger.info("Sorting completed successfully")
+
         combine_conn.close()
 
         # Clean up batch files

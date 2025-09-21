@@ -1,5 +1,5 @@
 """
-Test batched segmentation to ensure it works correctly.
+Test batched segmentation and combining to ensure it works correctly.
 """
 
 import datetime
@@ -185,3 +185,141 @@ def test_batch_size_configuration(multi_aircraft_data, tmp_path, monkeypatch):
         conn.close()
 
         assert len(segments) == 5, f"Failed with batch_size={batch_size}"
+
+
+def test_union_all_by_name_combines_correctly(tmp_path):
+    """Test that UNION ALL BY NAME handles the two-pass combine correctly."""
+    # Create sample batch files with segment data
+    batch_dir = tmp_path / "batches"
+    batch_dir.mkdir()
+
+    conn = duckdb.connect()
+
+    # Create 3 batch files to test combining
+    for batch_num in range(3):
+        batch_file = batch_dir / f".batch_{batch_num}_test.parquet"
+
+        # Create realistic segment data
+        conn.execute(f"""
+            COPY (
+                WITH segments AS (
+                    SELECT
+                        'seg_' || (n + {batch_num * 100})::VARCHAR as segment_id,
+                        'aircraft_' || ((n % 10) + {batch_num * 10})::VARCHAR as icao24,
+                        1700000000 + (n * 100) as start_time,
+                        1700000000 + (n * 100) + 60 as end_time,
+                        n as num_samples,
+                        100.0 + n * 0.1 as distance_km,
+                        60 as duration_s,
+                        40.0 + (n % 10) * 0.01 as start_lat,
+                        -74.0 + (n % 10) * 0.01 as start_lon,
+                        40.1 + (n % 10) * 0.01 as end_lat,
+                        -73.9 + (n % 10) * 0.01 as end_lon,
+                        CASE WHEN n % 20 = 0 THEN '7700' ELSE NULL END as squawk_codes,
+                        0.5 as squawk_coverage
+                    FROM generate_series(1, 50) as t(n)
+                )
+                SELECT * FROM segments
+            ) TO '{batch_file}' (FORMAT PARQUET)
+        """)
+
+    # Test the two-pass combine approach
+    batch_files = sorted(batch_dir.glob(".batch_*.parquet"))
+    assert len(batch_files) == 3
+
+    # Build UNION ALL BY NAME query (matches production code)
+    union_parts = [f"SELECT * FROM read_parquet('{bf}')" for bf in batch_files]
+    union_query = " UNION ALL BY NAME ".join(union_parts)
+
+    # Configure connection as production does
+    conn.execute("SET memory_limit = '1GB'")
+    conn.execute("SET preserve_insertion_order = false")
+
+    # Pass 1: Combine without ORDER BY
+    unsorted_file = tmp_path / "unsorted.parquet"
+    conn.execute(f"""
+        COPY (
+            {union_query}
+        ) TO '{unsorted_file}' (FORMAT PARQUET, COMPRESSION 'zstd')
+    """)
+
+    # Verify unsorted has all data
+    result = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{unsorted_file}')").fetchone()
+    assert result is not None
+    assert result[0] == 150, "Should have 150 segments total"
+
+    # Pass 2: Sort (this is what production does)
+    sorted_file = tmp_path / "sorted.parquet"
+    conn.execute(f"""
+        COPY (
+            SELECT * FROM read_parquet('{unsorted_file}')
+            ORDER BY icao24, start_time
+        ) TO '{sorted_file}' (FORMAT PARQUET, COMPRESSION 'zstd')
+    """)
+
+    # Verify sorting worked correctly
+    result = conn.execute(f"""
+        WITH ordered_check AS (
+            SELECT
+                icao24,
+                start_time,
+                LAG(icao24) OVER (ORDER BY icao24, start_time) as prev_icao24,
+                LAG(start_time) OVER (ORDER BY icao24, start_time) as prev_start_time
+            FROM read_parquet('{sorted_file}')
+        )
+        SELECT COUNT(*)
+        FROM ordered_check
+        WHERE (icao24 < prev_icao24) OR
+              (icao24 = prev_icao24 AND start_time < prev_start_time)
+    """).fetchone()
+    assert result is not None
+    assert result[0] == 0, "Data should be properly sorted by icao24, start_time"
+
+    conn.close()
+
+
+def test_combine_with_low_memory_limit(tmp_path):
+    """Test that combining works even with very low memory limits."""
+    batch_dir = tmp_path / "batches"
+    batch_dir.mkdir()
+
+    conn = duckdb.connect()
+
+    # Create batch files
+    for batch_num in range(2):
+        batch_file = batch_dir / f".batch_{batch_num}.parquet"
+        conn.execute(f"""
+            COPY (
+                SELECT
+                    'seg_' || n::VARCHAR as segment_id,
+                    'aircraft_' || (n % 5)::VARCHAR as icao24,
+                    1700000000 + (n * 60) as start_time,
+                    1700000000 + (n * 60) + 50 as end_time
+                FROM generate_series({batch_num * 100}, {batch_num * 100 + 99}) as t(n)
+            ) TO '{batch_file}' (FORMAT PARQUET)
+        """)
+
+    # Test with very low memory (forces streaming)
+    conn.execute("SET memory_limit = '100MB'")
+    conn.execute("SET preserve_insertion_order = false")
+    conn.execute("SET threads = 1")
+
+    batch_files = sorted(batch_dir.glob(".batch_*.parquet"))
+    union_parts = [f"SELECT * FROM read_parquet('{bf}')" for bf in batch_files]
+    union_query = " UNION ALL BY NAME ".join(union_parts)
+
+    output_file = tmp_path / "low_memory_output.parquet"
+
+    # Should complete without OOM
+    conn.execute(f"""
+        COPY (
+            {union_query}
+        ) TO '{output_file}' (FORMAT PARQUET, COMPRESSION 'zstd')
+    """)
+
+    # Verify all data present
+    result = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{output_file}')").fetchone()
+    assert result is not None
+    assert result[0] == 200, "Should handle low memory scenario"
+
+    conn.close()
