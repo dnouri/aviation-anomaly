@@ -48,6 +48,14 @@ def segment_day(date: datetime.date, output_dir: Path, config: Config) -> Path:
     Always processes data in batches to control memory usage.
     Batch size is configurable via config.segments.batch_size.
 
+    Output Structure:
+        The output file contains block-sorted data:
+        - Each batch's segments are sorted by (icao24, start_time)
+        - All segments for a given aircraft are in the same batch
+        - Batches themselves are not globally ordered
+        This structure is optimal for downstream operations that process
+        segments independently or by geographic location.
+
     Args:
         date: Date to process
         output_dir: Output directory for segment files
@@ -148,28 +156,18 @@ def segment_day(date: datetime.date, output_dir: Path, config: Config) -> Path:
         # Additional optimization for large combines
         combine_conn.execute("SET preserve_insertion_order = false")
 
-        # Two-pass approach to avoid OOM: combine first, then sort
-        unsorted_path = output_dir / f".unsorted_{date}.parquet"
-
-        # Step 1: Combine all batches without ORDER BY (memory-efficient)
-        logger.info("Pass 1: Combining batch files using UNION ALL BY NAME...")
+        # Combine pre-sorted batches into final output
+        # Note: Output is block-sorted - each batch's data remains internally sorted
+        # by (icao24, start_time), but batches themselves are not globally ordered.
+        # This structure is sufficient for downstream operations that process segments
+        # independently or by geographic location (H3 cells).
+        logger.info(f"Combining {len(batch_files)} pre-sorted batch files using UNION ALL BY NAME...")
         combine_conn.execute(f"""
             COPY (
                 {union_query}
-            ) TO '{unsorted_path}' (FORMAT PARQUET, COMPRESSION 'zstd')
-        """)
-
-        # Step 2: Sort the combined file (separate memory allocation)
-        logger.info("Pass 2: Sorting combined output by icao24 and start_time...")
-        combine_conn.execute(f"""
-            COPY (
-                SELECT * FROM read_parquet('{unsorted_path}')
-                ORDER BY icao24, start_time
             ) TO '{final_path}' (FORMAT PARQUET, COMPRESSION 'zstd')
         """)
-        # Clean up unsorted temp file
-        unsorted_path.unlink()
-        logger.info("Sorting completed successfully")
+        logger.info("Batch combination completed successfully")
 
         combine_conn.close()
 

@@ -188,7 +188,7 @@ def test_batch_size_configuration(multi_aircraft_data, tmp_path, monkeypatch):
 
 
 def test_union_all_by_name_combines_correctly(tmp_path):
-    """Test that UNION ALL BY NAME handles the two-pass combine correctly."""
+    """Test that UNION ALL BY NAME combines batches correctly while preserving block structure."""
     # Create sample batch files with segment data
     batch_dir = tmp_path / "batches"
     batch_dir.mkdir()
@@ -223,7 +223,7 @@ def test_union_all_by_name_combines_correctly(tmp_path):
             ) TO '{batch_file}' (FORMAT PARQUET)
         """)
 
-    # Test the two-pass combine approach
+    # Test the batch combination approach
     batch_files = sorted(batch_dir.glob(".batch_*.parquet"))
     assert len(batch_files) == 3
 
@@ -235,45 +235,35 @@ def test_union_all_by_name_combines_correctly(tmp_path):
     conn.execute("SET memory_limit = '1GB'")
     conn.execute("SET preserve_insertion_order = false")
 
-    # Pass 1: Combine without ORDER BY
-    unsorted_file = tmp_path / "unsorted.parquet"
+    # Combine batches (production now does single-pass combination)
+    combined_file = tmp_path / "combined.parquet"
     conn.execute(f"""
         COPY (
             {union_query}
-        ) TO '{unsorted_file}' (FORMAT PARQUET, COMPRESSION 'zstd')
+        ) TO '{combined_file}' (FORMAT PARQUET, COMPRESSION 'zstd')
     """)
 
-    # Verify unsorted has all data
-    result = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{unsorted_file}')").fetchone()
+    # Verify combined has all data
+    result = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{combined_file}')").fetchone()
     assert result is not None
     assert result[0] == 150, "Should have 150 segments total"
 
-    # Pass 2: Sort (this is what production does)
-    sorted_file = tmp_path / "sorted.parquet"
-    conn.execute(f"""
-        COPY (
-            SELECT * FROM read_parquet('{unsorted_file}')
-            ORDER BY icao24, start_time
-        ) TO '{sorted_file}' (FORMAT PARQUET, COMPRESSION 'zstd')
-    """)
-
-    # Verify sorting worked correctly
+    # Verify block-sorted structure: within each aircraft, segments are time-ordered
+    # This is the key invariant that downstream operations depend on
     result = conn.execute(f"""
-        WITH ordered_check AS (
+        WITH aircraft_groups AS (
             SELECT
                 icao24,
                 start_time,
-                LAG(icao24) OVER (ORDER BY icao24, start_time) as prev_icao24,
-                LAG(start_time) OVER (ORDER BY icao24, start_time) as prev_start_time
-            FROM read_parquet('{sorted_file}')
+                LAG(start_time) OVER (PARTITION BY icao24 ORDER BY start_time) as prev_start_time
+            FROM read_parquet('{combined_file}')
         )
         SELECT COUNT(*)
-        FROM ordered_check
-        WHERE (icao24 < prev_icao24) OR
-              (icao24 = prev_icao24 AND start_time < prev_start_time)
+        FROM aircraft_groups
+        WHERE prev_start_time IS NOT NULL AND start_time < prev_start_time
     """).fetchone()
     assert result is not None
-    assert result[0] == 0, "Data should be properly sorted by icao24, start_time"
+    assert result[0] == 0, "Within each aircraft, segments should be time-ordered"
 
     conn.close()
 

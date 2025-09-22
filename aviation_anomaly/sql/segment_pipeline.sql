@@ -175,7 +175,9 @@ COPY (
             k.keep_reason
     )
     
-    -- Final output
+    -- Output sorted by icao24 and start_time within this batch
+    -- Each batch contains complete data for its assigned aircraft
     SELECT * 
     FROM final_segments
+    ORDER BY icao24, start_time
 ) TO '{{ output_path }}' (FORMAT PARQUET, COMPRESSION 'zstd')
