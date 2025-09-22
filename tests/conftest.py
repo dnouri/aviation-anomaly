@@ -176,8 +176,14 @@ def emergency_segment():
         emergency_type: str = "7700",
         ground_ratio: float = 0.0,
         total_duration_s: int = 1000,
+        squawk_coverage: float = 1.0,  # New: partial squawk coverage support
     ) -> dict:
-        """Build a segment with emergency squawk samples."""
+        """Build a segment with emergency squawk samples.
+
+        Args:
+            squawk_coverage: Fraction of points with squawk data (0.0 to 1.0).
+                            Realistic value is ~0.5 based on real data.
+        """
         if segment_id is None:
             segment_id = f"{icao24}_1"
 
@@ -190,10 +196,26 @@ def emergency_segment():
         # Create emergency points
         points: list[dict[str, Any]] = []
         for i in range(emergency_samples):
+            # Apply squawk coverage: some points may have NULL squawk
+            squawk_value: str | None
+            if i == 0 or i == emergency_samples - 1:
+                # Always keep first and last emergency squawks for detectability
+                squawk_value = emergency_type
+            elif squawk_coverage < 1.0:
+                # Randomly drop squawks based on coverage ratio
+                import random
+
+                # Use deterministic randomness based on position for reproducibility
+                random.seed(42 + i)  # Seed per position for consistent tests
+                squawk_value = emergency_type if random.random() < squawk_coverage else None
+                random.seed()  # Reset to system random after
+            else:
+                squawk_value = emergency_type
+
             points.append(
                 {
                     "time": int(start_time + i * time_between),
-                    "squawk": emergency_type,
+                    "squawk": squawk_value,
                     "onground": i < (emergency_samples * ground_ratio),
                 }
             )
@@ -203,8 +225,14 @@ def emergency_segment():
         remaining_time = (start_time + total_duration_s) - last_emergency_time
 
         if remaining_time > 10:
-            for t in range(int(last_emergency_time + 10), int(start_time + total_duration_s), 10):
-                points.append({"time": t, "squawk": "1200", "onground": False})
+            for j, t in enumerate(range(int(last_emergency_time + 10), int(start_time + total_duration_s), 10)):
+                # Apply squawk coverage to normal flight too
+                import random
+
+                random.seed(142 + j)  # Deterministic seed for normal flight points
+                normal_squawk: str | None = "1200" if random.random() < squawk_coverage else None
+                random.seed()  # Reset
+                points.append({"time": t, "squawk": normal_squawk, "onground": False})
 
         return {
             "segment_id": segment_id,
@@ -345,6 +373,103 @@ def segment_with_radio_failure(emergency_segment):
     def _builder(*, icao24: str = "test") -> dict:
         """Build segment with radio failure (7600)."""
         return emergency_segment(icao24=icao24, emergency_type="7600", emergency_samples=20, emergency_span_s=60)
+
+    return _builder
+
+
+@pytest.fixture
+def long_duration_segment(emergency_segment):
+    """Builder fixture for long-duration segments (efficient version)."""
+
+    def _builder(
+        *,
+        icao24: str = "test",
+        duration_hours: float = 2.5,
+        emergency_type: str = "7700",
+        squawk_coverage: float = 0.5,  # Realistic coverage
+    ) -> dict:
+        """Build a long-duration segment efficiently.
+
+        Instead of thousands of points, we sample sparsely but maintain
+        enough density for incident detection (5+ points in 60s windows).
+        """
+        start_time = 1000
+        duration_s = int(duration_hours * 3600)
+
+        # With 50% coverage, we need more samples to ensure 5+ remain in 60s
+        # If we want 5+ points in 60s after 50% loss, we need ~12 original
+        # But first/last are always kept, so we need fewer in middle
+        emergency_duration = 90  # 90s emergency
+        emergency_samples = 20  # Should give us ~10 after 50% coverage
+
+        return emergency_segment(
+            icao24=icao24,
+            start_time=start_time,
+            emergency_samples=emergency_samples,
+            emergency_span_s=emergency_duration,
+            emergency_type=emergency_type,
+            total_duration_s=duration_s,
+            squawk_coverage=squawk_coverage,
+        )
+
+    return _builder
+
+
+@pytest.fixture
+def takeoff_emergency_segment(emergency_segment):
+    """Builder fixture for emergency during takeoff (ground to air transition)."""
+
+    def _builder(*, icao24: str = "test", emergency_type: str = "7700") -> dict:
+        """Build segment with emergency during takeoff.
+
+        Simulates: Ground (30%) -> Emergency declared -> Airborne (70%)
+        This is realistic for engine failure or bird strike on takeoff.
+        """
+        # Start with 30% ground ratio, transitioning to airborne
+        return emergency_segment(
+            icao24=icao24,
+            emergency_samples=20,
+            emergency_span_s=90,
+            emergency_type=emergency_type,
+            ground_ratio=0.3,  # First 30% of emergency points on ground
+            total_duration_s=600,
+            squawk_coverage=0.8,  # Good coverage during critical phase
+        )
+
+    return _builder
+
+
+@pytest.fixture
+def landing_emergency_segment(emergency_segment):
+    """Builder fixture for emergency during landing (air to ground transition)."""
+
+    def _builder(*, icao24: str = "test", emergency_type: str = "7700") -> dict:
+        """Build segment with emergency during landing.
+
+        Simulates: Airborne -> Emergency declared -> Ground (last 40%)
+        This is realistic for gear problems or runway emergencies.
+        """
+        # Custom build to put ground points at the end
+        segment = emergency_segment(
+            icao24=icao24,
+            emergency_samples=20,
+            emergency_span_s=90,
+            emergency_type=emergency_type,
+            ground_ratio=0.0,  # Start airborne
+            total_duration_s=600,
+            squawk_coverage=0.7,
+        )
+
+        # Modify last 40% of points to be on ground
+        points = segment["points"]
+        emergency_count = 20
+        ground_start = int(emergency_count * 0.6)  # Last 40% on ground
+
+        for i in range(ground_start, emergency_count):
+            if i < len(points):
+                points[i]["onground"] = True
+
+        return segment
 
     return _builder
 

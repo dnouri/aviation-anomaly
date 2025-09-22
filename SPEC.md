@@ -205,8 +205,10 @@ Record fields:
 
 **4.2.4 Segment→H3 Coverage**
 - Compute H3 cells touched by segment polyline for resolutions r3–r7
-- Use coordinate arrays with h3-duckdb `h3_line` function
+- Each resolution is computed independently from raw segment data (not hierarchically)
+- Use coordinate arrays with h3-duckdb extension functions
 - Track both unique segments and coverage per cell
+- NULL coordinate points are filtered but don't invalidate the segment
 
 **2.2.4 Aircraft Enrichment (left‑join)**
 - Join aircraft CSV on `icao24` to add `typecode`, `model`, `manufacturer`, `registration`.
@@ -223,13 +225,14 @@ For each period (week for prototype) and H3 **resolution r ∈ {3..7}**:
 **Dual Metrics Approach:**
 - `flights_unique` = Count of unique segments touching cell (denominator)
 - `incidents_unique` = Count of unique incidents in cell (for rates)
-- `incidents_coverage` = Total incident-cell intersections (for heatmap)
+- `incidents_coverage` = Total incident-cell intersections (for heatmap) - if one incident crosses 5 cells, each cell gets incidents_coverage=1
 - `rate_unique_ppm` = `incidents_unique / flights_unique * 1e6`
 - `rate_coverage_ppm` = `incidents_coverage / flights_unique * 1e6`
 
 **Coverage Quality Metrics:**
-- `points_per_flight_median` = Primary coverage indicator
-- Coverage categories based on observation density:
+- `points_per_flight` = Total points / unique segments within each cell (calculated per cell)
+- `points_per_flight_median` = Primary coverage indicator (median PPF within each cell)
+- Coverage categories based on observation density per cell:
   - Excellent: ≥10 points per flight
   - Good: 6-9 points per flight
   - Limited: 3-5 points per flight

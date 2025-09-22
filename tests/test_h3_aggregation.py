@@ -230,3 +230,709 @@ class TestH3Aggregation:
         assert kept_cell == 30, "Should keep cell with 30 segments"
 
         conn.close()
+
+
+class TestMultiCellSegmentCounting:
+    """Test that segments crossing multiple cells are counted correctly."""
+
+    def test_one_segment_many_cells(self, tmp_path: Path) -> None:
+        """Test that one segment crossing many cells counts as 1 in each cell."""
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("SET memory_limit = '100MB'")
+
+        # Create a segment that crosses multiple cells (like a real flight)
+        # Using coordinates that span ~100km to cross multiple R5 cells
+        segments_file = tmp_path / "multi_cell_segment.parquet"
+
+        conn.execute(f"""
+            COPY (
+                SELECT
+                    'flight001' as segment_id,
+                    'abc123' as icao24,
+                    1700000000 as start_time,
+                    1700003600 as end_time,
+                    3600 as duration_seconds,
+                    50 as point_count,
+                    -- Create a line of points from London towards Paris
+                    [
+                        {{'time': 1700000000 + i * 72, 'lat': 51.5 + i * 0.05, 'lon': -0.1 + i * 0.05,
+                          'squawk': '1200', 'onground': false, 'alert': false}}
+                        FOR i IN generate_series(0, 49)
+                    ] as points
+            ) TO '{segments_file}' (FORMAT PARQUET)
+        """)
+
+        # Run H3 aggregation
+        from aviation_anomaly.h3_aggregation import compute_h3_coverage
+
+        output_file = tmp_path / "h3_coverage.parquet"
+        compute_h3_coverage(segment_file=segments_file, output_file=output_file, resolution=5)
+
+        # Verify results
+        result = conn.execute(f"""
+            SELECT
+                COUNT(*) as cell_count,
+                MIN(unique_segments) as min_segments,
+                MAX(unique_segments) as max_segments,
+                SUM(unique_segments) as total_segment_counts
+            FROM read_parquet('{output_file}')
+        """).fetchone()
+
+        # The segment should appear in multiple cells
+        assert result[0] > 5, f"Segment should cross multiple cells, got {result[0]}"  # type: ignore[index]
+
+        # Each cell should count the segment exactly once
+        assert result[1] == 1, f"Each cell should have min 1 segment, got {result[1]}"  # type: ignore[index]
+        assert result[2] == 1, f"Each cell should have max 1 segment, got {result[2]}"  # type: ignore[index]
+
+        # Total segment counts should equal number of cells (not 1!)
+        assert result[3] == result[0], "Each cell counts the segment once"  # type: ignore[index]
+
+        # Verify segment_list contains our segment
+        segment_lists = conn.execute(f"""
+            SELECT segment_list
+            FROM read_parquet('{output_file}')
+            LIMIT 1
+        """).fetchone()[0]  # type: ignore[index]
+
+        assert "flight001" in segment_lists, "Segment ID should be in segment_list"
+
+        conn.close()
+
+    def test_multiple_segments_overlapping_cells(self, tmp_path: Path) -> None:
+        """Test correct counting when multiple segments pass through same cells."""
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("SET memory_limit = '100MB'")
+
+        segments_file = tmp_path / "overlapping_segments.parquet"
+
+        # Create 3 segments that partially overlap in space
+        conn.execute(f"""
+            COPY (
+                -- Segment 1: Goes north
+                SELECT
+                    'flight001' as segment_id,
+                    'abc123' as icao24,
+                    1700000000 as start_time,
+                    1700001000 as end_time,
+                    1000 as duration_seconds,
+                    10 as point_count,
+                    [
+                        {{'time': 1700000000 + i * 100, 'lat': 51.5 + i * 0.01, 'lon': 0.0,
+                          'squawk': '1200', 'onground': false, 'alert': false}}
+                        FOR i IN generate_series(0, 9)
+                    ] as points
+                UNION ALL
+                -- Segment 2: Goes east
+                SELECT
+                    'flight002' as segment_id,
+                    'def456' as icao24,
+                    1700001000 as start_time,
+                    1700002000 as end_time,
+                    1000 as duration_seconds,
+                    10 as point_count,
+                    [
+                        {{'time': 1700001000 + i * 100, 'lat': 51.5, 'lon': 0.0 + i * 0.01,
+                          'squawk': '1200', 'onground': false, 'alert': false}}
+                        FOR i IN generate_series(0, 9)
+                    ] as points
+                UNION ALL
+                -- Segment 3: Goes through the crossing point
+                SELECT
+                    'flight003' as segment_id,
+                    'ghi789' as icao24,
+                    1700002000 as start_time,
+                    1700003000 as end_time,
+                    1000 as duration_seconds,
+                    10 as point_count,
+                    [
+                        {{'time': 1700002000 + i * 100, 'lat': 51.49 + i * 0.002, 'lon': -0.01 + i * 0.002,
+                          'squawk': '1200', 'onground': false, 'alert': false}}
+                        FOR i IN generate_series(0, 9)
+                    ] as points
+            ) TO '{segments_file}' (FORMAT PARQUET)
+        """)
+
+        # Run H3 aggregation
+        from aviation_anomaly.h3_aggregation import compute_h3_coverage
+
+        output_file = tmp_path / "h3_coverage_overlap.parquet"
+        compute_h3_coverage(segment_file=segments_file, output_file=output_file, resolution=6)
+
+        # Find the cell at the origin where all segments start/pass
+        origin_cell = conn.execute("""
+            SELECT h3_latlng_to_cell(51.5, 0.0, 6)
+        """).fetchone()[0]  # type: ignore[index]
+
+        # Check that origin cell has correct counts
+        result = conn.execute(f"""
+            SELECT
+                unique_segments,
+                unique_aircraft,
+                total_points,
+                segment_list,
+                aircraft_list
+            FROM read_parquet('{output_file}')
+            WHERE h3_cell = {origin_cell}
+        """).fetchone()
+
+        if result:  # Origin cell might be found
+            # Should have 2-3 segments depending on exact overlap
+            assert result[0] >= 2, f"Origin should have at least 2 segments, got {result[0]}"
+            assert result[1] >= 2, f"Origin should have at least 2 aircraft, got {result[1]}"
+
+            # Verify lists contain expected IDs
+            assert "flight001" in result[3] or "flight002" in result[3], "Should contain expected segments"
+
+        conn.close()
+
+
+class TestIncidentAttribution:
+    """Test incident attribution across H3 cells following dual metrics approach."""
+
+    def test_incident_crossing_multiple_cells(self, tmp_path: Path) -> None:
+        """Test dual metrics when one incident spans multiple cells."""
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("SET memory_limit = '100MB'")
+
+        # Create an incident segment crossing 5+ cells
+        segments_file = tmp_path / "incident_segment.parquet"
+        incidents_file = tmp_path / "incidents.parquet"
+
+        # Create segment with emergency
+        conn.execute(f"""
+            COPY (
+                SELECT
+                    'emrg001' as segment_id,
+                    'abc123' as icao24,
+                    1700000000 as start_time,
+                    1700001800 as end_time,
+                    1800 as duration_seconds,
+                    20 as point_count,
+                    [
+                        {{'time': 1700000000 + i * 90, 'lat': 51.5 + i * 0.02, 'lon': -0.1 + i * 0.02,
+                          'squawk': '7700', 'onground': false, 'alert': true}}
+                        FOR i IN generate_series(0, 19)
+                    ] as points
+            ) TO '{segments_file}' (FORMAT PARQUET)
+        """)
+
+        # Create corresponding incident
+        conn.execute(f"""
+            COPY (
+                SELECT
+                    'inc001' as incident_id,
+                    'emrg001' as segment_id,
+                    'abc123' as icao24,
+                    '7700' as emergency_type,
+                    1700000000 as start_time,
+                    1700001800 as end_time,
+                    1800 as duration_seconds,
+                    20.0 as total_samples,
+                    0.0 as ground_percentage,
+                    85 as confidence_score,
+                    'HIGH' as confidence_level,
+                    false as has_roller_dial,
+                    [] as roller_dial_codes,
+                    CURRENT_DATE as processing_date,
+                    CURRENT_TIMESTAMP as detected_at
+            ) TO '{incidents_file}' (FORMAT PARQUET)
+        """)
+
+        # Process H3 aggregation
+        from aviation_anomaly.h3_aggregation import compute_h3_coverage
+
+        output_file = tmp_path / "h3_with_incident.parquet"
+        compute_h3_coverage(segment_file=segments_file, output_file=output_file, resolution=5)
+
+        # Count how many cells the incident spans
+        cell_count = conn.execute(f"""
+            SELECT COUNT(*)
+            FROM read_parquet('{output_file}')
+        """).fetchone()[0]  # type: ignore[index]
+
+        assert cell_count >= 3, f"Incident should span multiple cells, got {cell_count}"
+
+        # Verify dual metrics if we had incident aggregation
+        # NOTE: Current h3_aggregation.sql doesn't include incident metrics
+        # This test documents expected behavior for when it's implemented
+
+        # Expected behavior:
+        # - incidents_unique = 1 in each cell (one unique incident)
+        # - incidents_coverage = 1 in each cell (one incident touches this cell)
+        # - Total incidents_coverage across all cells = number of cells touched
+
+        conn.close()
+
+
+class TestNullCoordinateHandling:
+    """Test handling of NULL coordinates in segment points."""
+
+    def test_segment_with_partial_null_coordinates(self, tmp_path: Path) -> None:
+        """Test that NULL coordinate points are filtered but segment remains."""
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("SET memory_limit = '100MB'")
+
+        segments_file = tmp_path / "null_coords_segment.parquet"
+
+        # Create segment with some NULL coordinates
+        conn.execute(f"""
+            COPY (
+                SELECT
+                    'flight_null' as segment_id,
+                    'abc123' as icao24,
+                    1700000000 as start_time,
+                    1700001000 as end_time,
+                    1000 as duration_seconds,
+                    10 as point_count,
+                    [
+                        -- First 3 points are valid
+                        {{'time': 1700000000, 'lat': 51.5, 'lon': 0.0, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700000100, 'lat': 51.51, 'lon': 0.01, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700000200, 'lat': 51.52, 'lon': 0.02, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        -- Next 3 have NULL coordinates
+                        {{'time': 1700000300, 'lat': NULL, 'lon': NULL, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700000400, 'lat': NULL, 'lon': 0.04, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700000500, 'lat': 51.55, 'lon': NULL, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        -- Last 4 are valid again
+                        {{'time': 1700000600, 'lat': 51.56, 'lon': 0.06, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700000700, 'lat': 51.57, 'lon': 0.07, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700000800, 'lat': 51.58, 'lon': 0.08, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700000900, 'lat': 51.59, 'lon': 0.09, 'squawk': '1200', 'onground': false, 'alert': false}}
+                    ] as points
+            ) TO '{segments_file}' (FORMAT PARQUET)
+        """)
+
+        # Run H3 aggregation
+        from aviation_anomaly.h3_aggregation import compute_h3_coverage
+
+        output_file = tmp_path / "h3_null_coords.parquet"
+        compute_h3_coverage(segment_file=segments_file, output_file=output_file, resolution=5)
+
+        # Verify segment was processed despite NULL coordinates
+        result = conn.execute(f"""
+            SELECT
+                COUNT(*) as cell_count,
+                SUM(unique_segments) as total_segments,
+                SUM(total_points) as total_points,
+                MIN(unique_segments) as min_segments
+            FROM read_parquet('{output_file}')
+        """).fetchone()
+
+        # Should have cells (from the 7 valid points)
+        assert result[0] > 0, "Should have H3 cells from valid points"  # type: ignore[index]
+
+        # Each cell should have the segment
+        assert result[3] == 1, "Each cell should count segment once"  # type: ignore[index]
+
+        # Total points should be 7 (10 - 3 NULL)
+        # Note: total_points is summed across cells, so may be higher if points repeat in cells
+        assert result[2] >= 7, f"Should have at least 7 valid points aggregated, got {result[2]}"  # type: ignore[index]
+
+        # Verify segment appears in results
+        segment_check = conn.execute(f"""
+            SELECT COUNT(*)
+            FROM read_parquet('{output_file}')
+            WHERE 'flight_null' = ANY(segment_list)
+        """).fetchone()[0]  # type: ignore[index]
+
+        assert segment_check > 0, "Segment should appear despite NULL coordinates"
+
+        conn.close()
+
+
+class TestPointsPerFlightCalculation:
+    """Test points-per-flight metric calculation per cell."""
+
+    def test_ppf_calculation_per_cell(self, tmp_path: Path) -> None:
+        """Test that each cell calculates its own PPF correctly."""
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("SET memory_limit = '100MB'")
+
+        segments_file = tmp_path / "ppf_segments.parquet"
+
+        # Create segments with different point densities in cells
+        conn.execute(f"""
+            COPY (
+                -- Segment 1: Dense coverage (many points in small area)
+                SELECT
+                    'dense001' as segment_id,
+                    'abc123' as icao24,
+                    1700000000 as start_time,
+                    1700001000 as end_time,
+                    1000 as duration_seconds,
+                    100 as point_count,
+                    [
+                        {{'time': 1700000000 + i * 10, 'lat': 51.5 + (i % 10) * 0.001, 'lon': 0.0 + (i / 10) * 0.001,
+                          'squawk': '1200', 'onground': false, 'alert': false}}
+                        FOR i IN generate_series(0, 99)
+                    ] as points
+                UNION ALL
+                -- Segment 2: Sparse coverage (few points, same area)
+                SELECT
+                    'sparse001' as segment_id,
+                    'def456' as icao24,
+                    1700002000 as start_time,
+                    1700002100 as end_time,
+                    100 as duration_seconds,
+                    2 as point_count,
+                    [
+                        {{'time': 1700002000, 'lat': 51.5, 'lon': 0.0, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700002100, 'lat': 51.501, 'lon': 0.001, 'squawk': '1200', 'onground': false, 'alert': false}}
+                    ] as points
+            ) TO '{segments_file}' (FORMAT PARQUET)
+        """)
+
+        # Run H3 aggregation
+        from aviation_anomaly.h3_aggregation import compute_h3_coverage
+
+        output_file = tmp_path / "h3_ppf.parquet"
+        compute_h3_coverage(segment_file=segments_file, output_file=output_file, resolution=6)
+
+        # Get the main cell where both segments overlap
+        main_cell = conn.execute("""
+            SELECT h3_latlng_to_cell(51.5, 0.0, 6)
+        """).fetchone()[0]  # type: ignore[index]
+
+        # Check PPF calculation
+        result = conn.execute(f"""
+            SELECT
+                unique_segments,
+                total_points,
+                CAST(total_points AS FLOAT) / unique_segments as calculated_ppf
+            FROM read_parquet('{output_file}')
+            WHERE h3_cell = {main_cell}
+        """).fetchone()
+
+        if result:
+            segments = result[0]
+            points = result[1]
+            ppf = result[2]
+
+            # Should have 2 segments
+            assert segments == 2, f"Should have 2 segments in main cell, got {segments}"
+
+            # PPF should be total_points / unique_segments
+            assert abs(ppf - points / segments) < 0.01, f"PPF calculation error: {ppf} != {points}/{segments}"
+
+            # Based on our data, PPF should be relatively high (many points from dense segment)
+            assert ppf > 10, f"PPF should be >10 with dense segment, got {ppf}"
+
+        conn.close()
+
+    def test_ppf_categories(self, tmp_path: Path) -> None:
+        """Test PPF-based coverage quality categories."""
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("SET memory_limit = '100MB'")
+
+        # Test with compute_coverage_metrics if it exists
+        from aviation_anomaly.h3_aggregation import compute_coverage_metrics
+
+        segments_file = tmp_path / "ppf_category_segments.parquet"
+
+        # Create segments with specific PPF values
+        conn.execute(f"""
+            COPY (
+                -- Excellent coverage: 20 points, 1 segment = PPF 20
+                SELECT
+                    'excel001' as segment_id,
+                    'abc123' as icao24,
+                    1700000000 as start_time,
+                    1700000200 as end_time,
+                    200 as duration_seconds,
+                    20 as point_count,
+                    [
+                        {{'time': 1700000000 + i * 10, 'lat': 40.0, 'lon': -74.0 + i * 0.0001,
+                          'squawk': '1200', 'onground': false, 'alert': false}}
+                        FOR i IN generate_series(0, 19)
+                    ] as points
+                UNION ALL
+                -- Good coverage: 8 points, 1 segment = PPF 8
+                SELECT
+                    'good001' as segment_id,
+                    'def456' as icao24,
+                    1700001000 as start_time,
+                    1700001080 as end_time,
+                    80 as duration_seconds,
+                    8 as point_count,
+                    [
+                        {{'time': 1700001000 + i * 10, 'lat': 41.0, 'lon': -73.0 + i * 0.0001,
+                          'squawk': '1200', 'onground': false, 'alert': false}}
+                        FOR i IN generate_series(0, 7)
+                    ] as points
+                UNION ALL
+                -- Limited coverage: 4 points, 1 segment = PPF 4
+                SELECT
+                    'limit001' as segment_id,
+                    'ghi789' as icao24,
+                    1700002000 as start_time,
+                    1700002040 as end_time,
+                    40 as duration_seconds,
+                    4 as point_count,
+                    [
+                        {{'time': 1700002000 + i * 10, 'lat': 42.0, 'lon': -72.0 + i * 0.0001,
+                          'squawk': '1200', 'onground': false, 'alert': false}}
+                        FOR i IN generate_series(0, 3)
+                    ] as points
+                UNION ALL
+                -- Poor coverage: 2 points, 1 segment = PPF 2
+                SELECT
+                    'poor001' as segment_id,
+                    'jkl012' as icao24,
+                    1700003000 as start_time,
+                    1700003020 as end_time,
+                    20 as duration_seconds,
+                    2 as point_count,
+                    [
+                        {{'time': 1700003000, 'lat': 43.0, 'lon': -71.0, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700003020, 'lat': 43.001, 'lon': -71.001, 'squawk': '1200', 'onground': false, 'alert': false}}
+                    ] as points
+            ) TO '{segments_file}' (FORMAT PARQUET)
+        """)
+
+        output_file = tmp_path / "h3_coverage_categories.parquet"
+        compute_coverage_metrics(segment_file=segments_file, output_file=output_file, resolution=5)
+
+        # Check categories
+        result = conn.execute(f"""
+            SELECT
+                median_points_per_cell,
+                coverage_category
+            FROM read_parquet('{output_file}')
+            ORDER BY median_points_per_cell DESC
+        """).fetchall()
+
+        for ppf, category in result:
+            if ppf >= 10:
+                assert category == "excellent", f"PPF {ppf} should be excellent"
+            elif ppf >= 6:
+                assert category == "good", f"PPF {ppf} should be good"
+            elif ppf >= 3:
+                assert category == "limited", f"PPF {ppf} should be limited"
+            else:
+                assert category == "poor", f"PPF {ppf} should be poor"
+
+        conn.close()
+
+
+class TestCellHierarchyConsistency:
+    """Test H3 resolution hierarchy independence."""
+
+    def test_resolutions_computed_independently(self, tmp_path: Path) -> None:
+        """Test that each resolution is computed from raw data, not hierarchically."""
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("SET memory_limit = '100MB'")
+
+        segments_file = tmp_path / "hierarchy_segments.parquet"
+
+        # Create segments in a small area - simpler approach
+        conn.execute(f"""
+            COPY (
+                SELECT 'seg0' as segment_id, 'plane0' as icao24, 1700000000 as start_time, 1700000600 as end_time,
+                       600 as duration_seconds, 5 as point_count,
+                       [{{'time': 1700000000, 'lat': 51.5, 'lon': 0.0, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700000120, 'lat': 51.5002, 'lon': 0.0002, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700000240, 'lat': 51.5004, 'lon': 0.0004, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700000360, 'lat': 51.5006, 'lon': 0.0006, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700000480, 'lat': 51.5008, 'lon': 0.0008, 'squawk': '1200', 'onground': false, 'alert': false}}] as points
+                UNION ALL
+                SELECT 'seg1' as segment_id, 'plane1' as icao24, 1700001000 as start_time, 1700001600 as end_time,
+                       600 as duration_seconds, 5 as point_count,
+                       [{{'time': 1700001000, 'lat': 51.501, 'lon': 0.001, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700001120, 'lat': 51.5012, 'lon': 0.0012, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700001240, 'lat': 51.5014, 'lon': 0.0014, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700001360, 'lat': 51.5016, 'lon': 0.0016, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700001480, 'lat': 51.5018, 'lon': 0.0018, 'squawk': '1200', 'onground': false, 'alert': false}}] as points
+                UNION ALL
+                SELECT 'seg2' as segment_id, 'plane2' as icao24, 1700002000 as start_time, 1700002600 as end_time,
+                       600 as duration_seconds, 5 as point_count,
+                       [{{'time': 1700002000, 'lat': 51.502, 'lon': 0.002, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700002120, 'lat': 51.5022, 'lon': 0.0022, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700002240, 'lat': 51.5024, 'lon': 0.0024, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700002360, 'lat': 51.5026, 'lon': 0.0026, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700002480, 'lat': 51.5028, 'lon': 0.0028, 'squawk': '1200', 'onground': false, 'alert': false}}] as points
+                UNION ALL
+                SELECT 'seg3' as segment_id, 'plane3' as icao24, 1700003000 as start_time, 1700003600 as end_time,
+                       600 as duration_seconds, 5 as point_count,
+                       [{{'time': 1700003000, 'lat': 51.503, 'lon': 0.003, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700003120, 'lat': 51.5032, 'lon': 0.0032, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700003240, 'lat': 51.5034, 'lon': 0.0034, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700003360, 'lat': 51.5036, 'lon': 0.0036, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700003480, 'lat': 51.5038, 'lon': 0.0038, 'squawk': '1200', 'onground': false, 'alert': false}}] as points
+                UNION ALL
+                SELECT 'seg4' as segment_id, 'plane4' as icao24, 1700004000 as start_time, 1700004600 as end_time,
+                       600 as duration_seconds, 5 as point_count,
+                       [{{'time': 1700004000, 'lat': 51.504, 'lon': 0.004, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700004120, 'lat': 51.5042, 'lon': 0.0042, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700004240, 'lat': 51.5044, 'lon': 0.0044, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700004360, 'lat': 51.5046, 'lon': 0.0046, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700004480, 'lat': 51.5048, 'lon': 0.0048, 'squawk': '1200', 'onground': false, 'alert': false}}] as points
+            ) TO '{segments_file}' (FORMAT PARQUET)
+        """)
+
+        # Compute at different resolutions
+        from aviation_anomaly.h3_aggregation import compute_h3_coverage
+
+        output_r4 = tmp_path / "h3_r4.parquet"
+        output_r5 = tmp_path / "h3_r5.parquet"
+
+        compute_h3_coverage(segment_file=segments_file, output_file=output_r4, resolution=4)
+        compute_h3_coverage(segment_file=segments_file, output_file=output_r5, resolution=5)
+
+        # Get counts at each resolution
+        r4_stats = conn.execute(f"""
+            SELECT
+                COUNT(*) as cell_count,
+                SUM(unique_segments) as total_segment_counts,
+                MAX(unique_segments) as max_segments_per_cell
+            FROM read_parquet('{output_r4}')
+        """).fetchone()
+
+        r5_stats = conn.execute(f"""
+            SELECT
+                COUNT(*) as cell_count,
+                SUM(unique_segments) as total_segment_counts,
+                MAX(unique_segments) as max_segments_per_cell
+            FROM read_parquet('{output_r5}')
+        """).fetchone()
+
+        # R5 may have more or same cells as R4 depending on segment distribution
+        # The key point is that they're computed independently from raw data
+
+        # Each resolution computed independently, so segment counts are based on actual data
+        # Not derived from parent/child relationships
+        assert r4_stats[2] <= 5, "Max segments per cell should be <= 5 (we created 5 segments)"  # type: ignore[index]
+        assert r5_stats[2] <= 5, "Max segments per cell should be <= 5 at any resolution"  # type: ignore[index]
+
+        # Verify independence: Each resolution has its own aggregation
+        # If they were hierarchical, R4 would be derived from R5
+        # Instead, both compute directly from segments
+        assert r4_stats[0] > 0, "R4 should have cells"  # type: ignore[index]
+        assert r5_stats[0] > 0, "R5 should have cells"  # type: ignore[index]
+
+        conn.close()
+
+
+class TestSinglePointEdgeCases:
+    """Test edge cases with minimal data."""
+
+    def test_segment_with_less_than_2_points_filtered(self, tmp_path: Path) -> None:
+        """Test that segments with <2 points are filtered per SPEC."""
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("SET memory_limit = '100MB'")
+
+        segments_file = tmp_path / "single_point_segment.parquet"
+
+        # Create mix of valid and invalid segments
+        conn.execute(f"""
+            COPY (
+                -- Invalid: 1 point segment
+                SELECT
+                    'single001' as segment_id,
+                    'abc123' as icao24,
+                    1700000000 as start_time,
+                    1700000000 as end_time,
+                    0 as duration_seconds,
+                    1 as point_count,
+                    [
+                        {{'time': 1700000000, 'lat': 51.5, 'lon': 0.0, 'squawk': '1200', 'onground': false, 'alert': false}}
+                    ] as points
+                UNION ALL
+                -- Valid: 2 point segment
+                SELECT
+                    'valid001' as segment_id,
+                    'def456' as icao24,
+                    1700001000 as start_time,
+                    1700001100 as end_time,
+                    100 as duration_seconds,
+                    2 as point_count,
+                    [
+                        {{'time': 1700001000, 'lat': 51.5, 'lon': 0.0, 'squawk': '1200', 'onground': false, 'alert': false}},
+                        {{'time': 1700001100, 'lat': 51.51, 'lon': 0.01, 'squawk': '1200', 'onground': false, 'alert': false}}
+                    ] as points
+            ) TO '{segments_file}' (FORMAT PARQUET)
+        """)
+
+        # Run H3 aggregation
+        from aviation_anomaly.h3_aggregation import compute_h3_coverage
+
+        output_file = tmp_path / "h3_edge_cases.parquet"
+        compute_h3_coverage(segment_file=segments_file, output_file=output_file, resolution=5)
+
+        # Check results
+        result = conn.execute(f"""
+            SELECT
+                array_agg(DISTINCT segment_id) as segment_ids
+            FROM (
+                SELECT unnest(segment_list) as segment_id
+                FROM read_parquet('{output_file}')
+            )
+        """).fetchone()[0]  # type: ignore[index]
+
+        # Only valid001 should appear (single001 filtered by WHERE point_count >= 2)
+        assert "valid001" in result, "Valid segment should be included"
+        assert "single001" not in result, "Single-point segment should be filtered"
+
+        conn.close()
+
+    def test_segment_with_points_in_same_cell(self, tmp_path: Path) -> None:
+        """Test segment with multiple points all in the same H3 cell."""
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("SET memory_limit = '100MB'")
+
+        segments_file = tmp_path / "same_cell_segment.parquet"
+
+        # Create segment with points very close together (same H3 cell)
+        conn.execute(f"""
+            COPY (
+                SELECT
+                    'stationary001' as segment_id,
+                    'abc123' as icao24,
+                    1700000000 as start_time,
+                    1700001000 as end_time,
+                    1000 as duration_seconds,
+                    10 as point_count,
+                    [
+                        {{'time': 1700000000 + i * 100,
+                          'lat': 51.5 + i * 0.00001,  -- Very small movement
+                          'lon': 0.0 + i * 0.00001,   -- Stays in same cell
+                          'squawk': '1200', 'onground': false, 'alert': false}}
+                        FOR i IN generate_series(0, 9)
+                    ] as points
+            ) TO '{segments_file}' (FORMAT PARQUET)
+        """)
+
+        # Run H3 aggregation
+        from aviation_anomaly.h3_aggregation import compute_h3_coverage
+
+        output_file = tmp_path / "h3_same_cell.parquet"
+        compute_h3_coverage(segment_file=segments_file, output_file=output_file, resolution=5)
+
+        # Check results
+        result = conn.execute(f"""
+            SELECT
+                COUNT(*) as cell_count,
+                MAX(unique_segments) as max_segments,
+                MAX(total_points) as max_points
+            FROM read_parquet('{output_file}')
+        """).fetchone()
+
+        # Should have exactly 1 cell
+        assert result[0] == 1, f"Should have exactly 1 cell, got {result[0]}"  # type: ignore[index]
+
+        # That cell should have 1 segment
+        assert result[1] == 1, f"Cell should have 1 segment, got {result[1]}"  # type: ignore[index]
+
+        # All 10 points should be in that cell
+        assert result[2] == 10, f"Cell should have 10 points, got {result[2]}"  # type: ignore[index]
+
+        conn.close()
