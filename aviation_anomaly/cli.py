@@ -542,10 +542,40 @@ def aggregate(
 
 
 @main.command()
+@click.option(
+    "--h3-dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=Path("data/h3"),
+    help="Directory containing H3 aggregation files",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=Path("data/tiles/geojson"),
+    help="Directory for GeoJSON output",
+)
+@click.option(
+    "--resolutions",
+    multiple=True,
+    type=click.IntRange(3, 7),
+    help="H3 resolutions to export (default: 3-7)",
+)
 @click.pass_context
-def tiles(ctx: click.Context) -> None:
-    """Generate PMTiles for map visualization."""
-    click.echo("Tile generation not yet implemented")
+def tiles(ctx: click.Context, h3_dir: Path, output_dir: Path, resolutions: tuple[int, ...]) -> None:
+    """Generate tiles from H3 aggregations for map visualization."""
+    from aviation_anomaly.tile_generation import export_h3_files_to_geojson
+
+    # Convert resolutions tuple to list, or use default
+    res_list = list(resolutions) if resolutions else None
+
+    click.echo(f"Exporting H3 data from {h3_dir} to {output_dir}")
+    if res_list:
+        click.echo(f"Resolutions: {res_list}")
+
+    export_h3_files_to_geojson(h3_dir, output_dir, res_list)
+
+    click.echo(f"\nGeoJSON files written to {output_dir}")
+    click.echo("Next step: Run tippecanoe to generate PMTiles")
 
 
 @main.command()

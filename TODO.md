@@ -457,12 +457,13 @@
 
 ### Tasks
 
-- [ ] **Export H3 cells to GeoJSON**
-  - RED: Test GeoJSON export missing
-  - GREEN: DuckDB ST_AsGeoJSON for cells (h3_cell_to_boundary_wkt available)
-  - GREEN: Include all aggregation metrics from 378MB of H3 data
-  - GREEN: Resolution-specific exports (r3-r7, up to 5M cells)
-  - Test: Valid GeoJSON structure
+- [x] **Export H3 cells to GeoJSON**
+  - RED: Test GeoJSON export missing ✓
+  - GREEN: DuckDB ST_AsGeoJSON for cells (h3_cell_to_boundary_wkt available) ✓
+  - GREEN: Include all aggregation metrics from H3 data ✓
+  - GREEN: Resolution-specific exports (r3-r7) ✓
+  - Test: Valid GeoJSON structure ✓
+  - COMPLETE: CLI command `aviation-anomaly tiles` exports to GeoJSON
 
 - [ ] **Generate PMTiles with Tippecanoe**
   - RED: Test PMTiles generation fails
