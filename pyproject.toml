@@ -37,12 +37,15 @@ dev-dependencies = [
     "pre-commit>=3.5.0",
     "types-requests>=2.32.4.20250913",
     "httpx>=0.28.1",
+    "playwright>=1.55.0",
+    "pytest-playwright>=0.7.1",
 ]
 
 [tool.pytest.ini_options]
 markers = [
     "integration: Integration tests for end-to-end pipeline",
     "unit: Fast unit tests for SQL transformations",
+    "e2e: End-to-end tests using Playwright",
 ]
 testpaths = ["tests"]
 addopts = "-v"

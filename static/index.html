@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aviation Anomaly Tracker</title>
+    <link href='https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl.css' rel='stylesheet' />
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        
+        #map {
+            position: absolute;
+            top: 60px;
+            bottom: 0;
+            width: 100%;
+        }
+        
+        .coverage-disclaimer {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: #fff3cd;
+            color: #856404;
+            padding: 10px 20px;
+            border-bottom: 1px solid #ffeeba;
+            z-index: 1000;
+            text-align: center;
+            font-size: 14px;
+        }
+        
+        .legend {
+            position: absolute;
+            bottom: 30px;
+            right: 10px;
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            z-index: 1;
+            font-size: 12px;
+        }
+        
+        .legend h4 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            margin-right: 8px;
+            border: 1px solid #ccc;
+        }
+        
+        #incident-details {
+            position: absolute;
+            top: 80px;
+            left: 10px;
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            z-index: 1;
+            max-width: 300px;
+            display: none;
+        }
+        
+        #incident-details.visible {
+            display: block;
+        }
+        
+        .filter-controls {
+            position: absolute;
+            top: 80px;
+            right: 10px;
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            z-index: 1;
+        }
+        
+        select {
+            padding: 5px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            background: white;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="coverage-disclaimer">
+        <strong>Note:</strong> Emergency squawk rates shown are from observed traffic only. 
+        Coverage and emergency procedures vary significantly by region.
+    </div>
+    
+    <div id="map"></div>
+    
+    <div class="filter-controls">
+        <label for="squawk-filter">Emergency Type:</label>
+        <select id="squawk-filter">
+            <option value="all">All</option>
+            <option value="7500">7500 - Hijack</option>
+            <option value="7600">7600 - Radio Failure</option>
+            <option value="7700">7700 - General Emergency</option>
+        </select>
+    </div>
+    
+    <div class="legend" id="legend">
+        <h4>Incident Rate (ppm)</h4>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #fee5d9;"></div>
+            <span>0 - Low</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #fcae91;"></div>
+            <span>1-5 - Medium</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #fb6a4a;"></div>
+            <span>5-10 - High</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #de2d26;"></div>
+            <span>10-20 - Very High</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #a50f15;"></div>
+            <span>20+ - Extreme</span>
+        </div>
+    </div>
+    
+    <div id="incident-details">
+        <h4>Cell Details</h4>
+        <div id="details-content"></div>
+    </div>
+    
+    <script src='https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl.js'></script>
+    <script src="https://unpkg.com/pmtiles@3.0.7/dist/pmtiles.js"></script>
+    <script>
+        // Register PMTiles protocol
+        const protocol = new pmtiles.Protocol();
+        maplibregl.addProtocol("pmtiles", protocol.tile);
+        
+        // Initialize map
+        const map = new maplibregl.Map({
+            container: 'map',
+            style: {
+                version: 8,
+                sources: {
+                    'osm': {
+                        type: 'raster',
+                        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+                        tileSize: 256,
+                        attribution: '© OpenStreetMap contributors'
+                    }
+                },
+                layers: [{
+                    id: 'osm',
+                    type: 'raster',
+                    source: 'osm'
+                }]
+            },
+            center: [0, 20],
+            zoom: 3
+        });
+        
+        // Make map accessible for tests
+        window.map = map;
+        
+        map.on('load', () => {
+            // Add PMTiles source for H3 data
+            map.addSource('h3-tiles', {
+                type: 'vector',
+                url: 'pmtiles:///tiles/h3_r4.pmtiles'
+            });
+            
+            // Add layer for H3 cells
+            // Note: source-layer name is based on the GeoJSONL filename
+            map.addLayer({
+                id: 'h3-cells',
+                type: 'fill',
+                source: 'h3-tiles',
+                'source-layer': 'h3_r4',  // Layer name from the GeoJSONL file
+                paint: {
+                    'fill-color': [
+                        'interpolate',
+                        ['linear'],
+                        ['coalesce', ['get', 'incidents_unique'], 0],
+                        0, '#fee5d9',
+                        1, '#fcae91',
+                        5, '#fb6a4a',
+                        10, '#de2d26',
+                        20, '#a50f15'
+                    ],
+                    'fill-opacity': 0.7
+                }
+            });
+            
+            // Add hover effect
+            let hoveredStateId = null;
+            
+            map.on('mousemove', 'h3-cells', (e) => {
+                map.getCanvas().style.cursor = 'pointer';
+                
+                if (e.features.length > 0) {
+                    const props = e.features[0].properties;
+                    
+                    // Show details on hover (for debugging)
+                    console.log('Hover:', props);
+                }
+            });
+            
+            map.on('mouseleave', 'h3-cells', () => {
+                map.getCanvas().style.cursor = '';
+            });
+            
+            // Click handler for cells
+            map.on('click', 'h3-cells', (e) => {
+                if (e.features.length > 0) {
+                    const props = e.features[0].properties;
+                    const details = document.getElementById('incident-details');
+                    const content = document.getElementById('details-content');
+                    
+                    content.innerHTML = `
+                        <p><strong>H3 Cell:</strong> ${props.h3_cell || 'N/A'}</p>
+                        <p><strong>Incidents:</strong> ${props.incidents_unique || 0}</p>
+                        <p><strong>Flights:</strong> ${props.unique_flights || 0}</p>
+                        <p><strong>Rate:</strong> ${props.incident_rate ? props.incident_rate.toFixed(2) : 'N/A'} ppm</p>
+                        <p><strong>Coverage:</strong> ${props.incidents_coverage || 0} observations</p>
+                    `;
+                    
+                    details.classList.add('visible');
+                }
+            });
+            
+            // Click on empty space to hide details
+            map.on('click', (e) => {
+                if (!map.queryRenderedFeatures(e.point, { layers: ['h3-cells'] }).length) {
+                    document.getElementById('incident-details').classList.remove('visible');
+                }
+            });
+        });
+        
+        // Handle filter changes
+        document.getElementById('squawk-filter').addEventListener('change', (e) => {
+            const filterValue = e.target.value;
+            
+            if (filterValue === 'all') {
+                // Show all incidents
+                map.setFilter('h3-cells', null); // Remove filter
+                map.setPaintProperty('h3-cells', 'fill-color', [
+                    'interpolate',
+                    ['linear'],
+                    ['coalesce', ['get', 'incidents_unique'], 0],
+                    0, '#fee5d9',
+                    1, '#fcae91',
+                    5, '#fb6a4a',
+                    10, '#de2d26',
+                    20, '#a50f15'
+                ]);
+            } else {
+                // Filter by emergency type using the predominant type
+                // Note: This shows cells where the predominant emergency type matches
+                map.setFilter('h3-cells', ['==', ['get', 'predominant_emergency_type'], filterValue]);
+            }
+        });
+    </script>
+</body>
+</html>

@@ -7,6 +7,7 @@ from typing import Any
 
 import duckdb
 from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.staticfiles import StaticFiles
 from qck import qck
 
 from aviation_anomaly.config import Config
@@ -328,5 +329,15 @@ def create_app() -> FastAPI:
             media_type="text/csv",
             headers={"Content-Disposition": f"attachment; filename=incidents_h3_{h3_cell}_r{resolution}.csv"},
         )
+
+    # Mount data files for PMTiles access
+    tiles_dir = Path("data/tiles/pmtiles")
+    if tiles_dir.exists():
+        app.mount("/tiles", StaticFiles(directory=str(tiles_dir)), name="tiles")
+
+    # Mount static files last (as fallback for everything else)
+    static_dir = Path("static")
+    if static_dir.exists():
+        app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
 
     return app
