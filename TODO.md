@@ -34,11 +34,12 @@
 2. **Extraction** ✅ — Daily/hourly Parquet with resume → *Raw data persisted locally*
 3. **Segmentation** ✅ — Gap detection, interpolation, H3 coverage → *Flight paths identified*
 4. **Incidents** ✅ — Emergency detection, debouncing → *Anomalies captured*
-5. **Aggregation** ☐ — H3 cells, rates, coverage → *Statistics computed*
-6. **Tiles** ☐ — PMTiles generation → *Map data ready*
-7. **API** ☐ — Drill-down endpoint → *Details accessible*
-8. **Frontend** ☐ — Interactive map → *Full visualization*
-9. **Integration** ☐ — End-to-end validation → *Production ready*
+5. **Aggregation** ✅ — H3 cells, rates, coverage → *Statistics computed*
+6. **Tiles** ✅ — PMTiles generation → *Map data ready*
+7. **API** ✅ — Drill-down endpoint → *Details accessible*
+8. **Frontend** ✅ — Interactive map → *Full visualization*
+9. **Filtering Fix** ☐ — Type-specific counters → *Accurate emergency filtering*
+10. **Integration** ☐ — End-to-end validation → *Production ready*
 
 ## Checkbox Discipline
 
@@ -587,7 +588,55 @@
 
 ---
 
-## Phase 9: Integration & Documentation ☐
+## Phase 9: Emergency Type Filtering Fix ☐
+
+**Goal**: Re-aggregate H3 data with separate emergency type counters for accurate filtering.
+
+**Outcome**: Frontend can filter to show ALL cells containing selected emergency type, not just predominant.
+
+**References**: SPEC §4.3 (Aggregation), §5.2.3 (Filters & Controls)
+
+### Current Limitation (As-Is)
+The H3 aggregation tracks `emergency_types_list` array and `predominant_emergency_type`, but not separate counters for each type. This causes the frontend filter to only show cells where the selected type is **dominant**, missing cells with mixed emergency types where the filtered type is present but not predominant.
+
+### Tasks
+
+- [ ] **Update H3 aggregation schema**
+  - RED: Test for incidents_7500, incidents_7600, incidents_7700 fields fails
+  - GREEN: Add type-specific counter fields to aggregation
+  - GREEN: Maintain backward compatibility with incidents_unique
+  - REFACTOR: Clean up SQL to use consistent naming
+  - Test: Verify sum of type counters equals incidents_unique
+
+- [ ] **Modify aggregation pipeline**
+  - RED: Test that type counters aggregate correctly fails
+  - GREEN: Update h3_incident_metrics.sql to COUNT by emergency_type
+  - GREEN: Populate new fields in output Parquet
+  - Test: Validate against known July 2nd data
+
+- [ ] **Regenerate PMTiles with new fields**
+  - RED: Test that PMTiles contain type-specific fields fails
+  - GREEN: Re-run tiles command with updated H3 data
+  - GREEN: Verify new fields preserved through Tippecanoe
+  - Test: Check PMTiles size increase is acceptable (<20%)
+
+- [ ] **Update frontend filtering**
+  - RED: E2E test for accurate type filtering fails
+  - GREEN: Use type-specific fields instead of predominant_emergency_type
+  - GREEN: Color scale based on filtered type counts
+  - Test: All cells with selected type are visible
+
+**Manual QC Checklist**:
+- [ ] Verify cells with mixed types appear when filtered
+- [ ] Check that "All" view shows total incidents_unique
+- [ ] Confirm PMTiles load time still acceptable
+- [ ] Test filter transitions are smooth
+
+**Commit Message**: `fix: add separate emergency type counters for accurate filtering`
+
+---
+
+## Phase 10: Integration & Documentation ☐
 
 **Goal**: End-to-end validation and learnings documentation.
 
@@ -676,7 +725,3 @@
 - Confidence scoring instead of receiver validation
 - Single coverage metric (points-per-flight) instead of composite
 - Document all limitations transparently
-
-## Next Immediate Step
-
-Phase 5: Implement H3 aggregation with dual metrics for visualization preparation.
