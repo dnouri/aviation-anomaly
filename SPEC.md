@@ -256,7 +256,7 @@ For each period (week for prototype) and H3 **resolution r ∈ {3..7}**:
 
 ### 4.4 Stage‑4 Tile Build (PMTiles/MVT)
 
-**Pipeline**: DuckDB exports H3 hexagons to GeoJSON → Tippecanoe generates PMTiles.
+**Pipeline**: DuckDB exports H3 hexagons to compressed GeoJSONL → Tippecanoe generates PMTiles.
 **Packaging**: One **PMTiles** per **resolution** containing **multiple months**; each feature carries `month` as an attribute.
 
 **Layer name**: `hotspots_r{r}`.
@@ -588,7 +588,7 @@ def test_temporal_quality_gate(emergency_segment, run_incident_detection):
 
 - **Test Data**: Real OpenSky samples (48h) for integration tests; synthetic data for edge cases.
 - **Mini month** (48h real sample + synthetic edge cases): run **Stage‑1→4**; compare MANIFEST counts to expectations.
-- **Tile validation**: parse PMTiles, check attribute presence/types, tile count heuristics, and size budgets.
+- **Tile validation**: Tippecanoe validates MVT encoding during generation; size budgets checked programmatically. No separate validation tools needed (YAGNI principle).
 
 ### 7.3 Frontend Tests
 
