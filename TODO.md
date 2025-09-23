@@ -508,11 +508,12 @@
   - Test: Response format validation ✓
   - REFACTOR: Extract constants, improve readability ✓
 
-- [ ] **Add export capabilities**
-  - RED: Test CSV export missing
-  - GREEN: Generate CSV with full metadata
-  - GREEN: Size limits (max 200 rows)
-  - Test: CSV format validation
+- [x] **Add export capabilities**
+  - RED: Test CSV export missing ✓
+  - GREEN: Generate CSV with full metadata ✓
+  - GREEN: Size limits (max 200 rows) ✓
+  - Test: CSV format validation ✓
+  - REFACTOR: Clean field mapping and imports ✓
 
 - [ ] **Create FastAPI wrapper**
   - RED: Test API server missing

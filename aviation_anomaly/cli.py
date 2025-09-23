@@ -538,18 +538,18 @@ def aggregate(
     else:
         click.echo("\nAll H3 coverage files already exist, skipping coverage aggregation")
 
-        # Determine incidents file to process
-        if incidents_file is None:
-            # Auto-detect based on segment filename
-            segment_date = segment_file.stem.replace("segments_", "")
-            incidents_dir = segment_file.parent.parent / "incidents"
-            incidents_file = incidents_dir / f"incidents_{segment_date}.parquet"
+    # Determine incidents file to process (moved outside the else block)
+    if incidents_file is None:
+        # Auto-detect based on segment filename
+        segment_date = segment_file.stem.replace("segments_", "")
+        incidents_dir = segment_file.parent.parent / "incidents"
+        incidents_file = incidents_dir / f"incidents_{segment_date}.parquet"
 
-            # Only process if auto-detected file exists
-            process_incidents = incidents_file.exists()
-        else:
-            # Explicit file provided - always process
-            process_incidents = True
+        # Only process if auto-detected file exists
+        process_incidents = incidents_file.exists()
+    else:
+        # Explicit file provided - always process
+        process_incidents = True
 
     if process_incidents:
         click.echo(f"\nProcessing incidents from: {incidents_file}")

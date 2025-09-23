@@ -1,5 +1,7 @@
 """Drill-down API for incident details."""
 
+import csv
+import io
 from pathlib import Path
 from typing import Any
 
@@ -193,3 +195,65 @@ def query_h3_cell_incidents(
     finally:
         if close_conn:
             conn.close()
+
+
+def export_h3_incidents_to_csv(
+    conn: duckdb.DuckDBPyConnection | None = None,
+    h3_cell: str = "",
+    resolution: int = 4,
+    emergency_type: str | None = None,
+    limit: int = 200,
+    config: Config | None = None,
+) -> str:
+    """Export H3 cell incidents to CSV format.
+
+    Args:
+        conn: Optional DuckDB connection to reuse
+        h3_cell: H3 cell to query
+        resolution: H3 resolution (3-7)
+        emergency_type: Optional filter for emergency type
+        limit: Maximum rows to return (default 200, enforced by SQL)
+        config: Optional configuration
+
+    Returns:
+        CSV string with incident data, headers included even if no data
+    """
+    # Get incident data using existing function
+    result = query_h3_cell_incidents(
+        conn=conn,
+        h3_cell=h3_cell,
+        resolution=resolution,
+        emergency_type=emergency_type,
+        limit=limit,
+        config=config,
+    )
+
+    # Field mapping from API response to CSV columns
+    field_mapping = {
+        "incident_id": "incident_id",
+        "start_time": "start_time",
+        "end_time": "end_time",
+        "emergency_type": "emergency_type",
+        "icao24": "icao24",
+        "callsign": "callsign",
+        "confidence_score": "confidence_score",
+        "confidence_category": "confidence_category",
+        "samples_in_emergency": "samples_in_emergency",
+        "emergency_duration_s": "duration_seconds",  # API field name differs
+        "ground_ratio": "ground_ratio",
+    }
+
+    # Create CSV in memory
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=list(field_mapping.keys()))
+    writer.writeheader()
+
+    # Write data rows if we have results
+    if result and result.get("rows"):
+        for row in result["rows"]:
+            csv_row = {}
+            for csv_field, api_field in field_mapping.items():
+                csv_row[csv_field] = row.get(api_field, "")
+            writer.writerow(csv_row)
+
+    return output.getvalue()
