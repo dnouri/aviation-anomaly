@@ -448,6 +448,12 @@ def detect(
     default="3,4,5,6,7",
     help="Comma-separated H3 resolutions (default: 3,4,5,6,7)",
 )
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Force regeneration of existing files (default: skip existing)",
+)
 @click.pass_context
 def aggregate(
     ctx: click.Context,
@@ -455,8 +461,13 @@ def aggregate(
     incidents_file: Path | None,
     output_dir: Path,
     resolutions: str,
+    force: bool,
 ) -> None:
-    """Aggregate segments to H3 hexagonal cells at multiple resolutions."""
+    """Aggregate segments to H3 hexagonal cells at multiple resolutions.
+
+    By default, skips existing output files for faster incremental processing.
+    Use --force to regenerate all files regardless of existence.
+    """
     from aviation_anomaly.h3_aggregation import compute_h3_coverage_multi_resolution
 
     # Parse resolutions
@@ -484,24 +495,48 @@ def aggregate(
     click.echo(f"Computing H3 aggregation for resolutions: {resolution_list}")
     click.echo(f"Input: {segment_file}")
     click.echo(f"Output directory: {output_dir}")
+    if force:
+        click.echo("Force mode: Will regenerate existing files")
+    else:
+        click.echo("Skip mode: Will skip existing files (use --force to regenerate)")
 
     # Load config
     config = ctx.obj["config"]
 
-    # Run aggregation
-    try:
-        results = compute_h3_coverage_multi_resolution(
-            segment_file=segment_file,
-            output_dir=output_dir,
-            resolutions=resolution_list,
-            config=config,
-        )
+    # Filter resolutions to process based on existing files
+    resolutions_to_process = []
+    for res in resolution_list:
+        coverage_file = output_dir / f"h3_coverage_r{res}.parquet"
+        if force or not coverage_file.exists():
+            resolutions_to_process.append(res)
+        else:
+            size_mb = coverage_file.stat().st_size / (1024 * 1024)
+            click.echo(f"  Skipping existing h3_coverage_r{res}.parquet ({size_mb:.1f} MB)")
 
-        click.echo("\nAggregation complete. Output files:")
-        for res, path in results.items():
-            if path.exists():
-                size_mb = path.stat().st_size / (1024 * 1024)
-                click.echo(f"  Resolution {res}: {path} ({size_mb:.1f} MB)")
+    # Run aggregation only for missing resolutions
+    results = {}
+    if resolutions_to_process:
+        try:
+            from aviation_anomaly.h3_aggregation import compute_h3_coverage_multi_resolution
+
+            results = compute_h3_coverage_multi_resolution(
+                segment_file=segment_file,
+                output_dir=output_dir,
+                resolutions=resolutions_to_process,
+                config=config,
+            )
+
+            click.echo("\nAggregation complete. Output files:")
+            for res, path in results.items():
+                if path.exists():
+                    size_mb = path.stat().st_size / (1024 * 1024)
+                    click.echo(f"  Resolution {res}: {path} ({size_mb:.1f} MB)")
+        except Exception as e:
+            logger.exception("H3 coverage aggregation failed")
+            click.echo(f"Error during coverage aggregation: {e}", err=True)
+            ctx.exit(1)
+    else:
+        click.echo("\nAll H3 coverage files already exist, skipping coverage aggregation")
 
         # Determine incidents file to process
         if incidents_file is None:
@@ -516,13 +551,27 @@ def aggregate(
             # Explicit file provided - always process
             process_incidents = True
 
-        if process_incidents:
-            click.echo(f"\nProcessing incidents from: {incidents_file}")
-            from aviation_anomaly.h3_aggregation import compute_dual_incident_metrics
+    if process_incidents:
+        click.echo(f"\nProcessing incidents from: {incidents_file}")
+        from aviation_anomaly.h3_aggregation import compute_dual_incident_metrics
 
-            # Process incidents for each resolution
-            for res in resolution_list:
-                incident_output = output_dir / f"h3_incidents_r{res}.parquet"
+        # Process incidents for each resolution
+        incidents_processed = []
+        for res in resolution_list:
+            incident_output = output_dir / f"h3_incidents_r{res}.parquet"
+            mapping_output = output_dir / f"incident_h3_mapping_r{res}.parquet"
+
+            # Check if both output files exist
+            if not force and incident_output.exists() and mapping_output.exists():
+                inc_size = incident_output.stat().st_size / (1024 * 1024)
+                map_size = mapping_output.stat().st_size / (1024 * 1024)
+                click.echo(f"  Skipping existing r{res}: incidents ({inc_size:.1f} MB), mapping ({map_size:.1f} MB)")
+                continue
+
+            try:
+                click.echo(f"  Processing resolution {res}...")
+                # incidents_file is guaranteed to exist here due to process_incidents check
+                assert incidents_file is not None  # Type hint for mypy
                 compute_dual_incident_metrics(
                     incidents_file=incidents_file,
                     segments_file=segment_file,
@@ -530,15 +579,24 @@ def aggregate(
                     resolution=res,
                     config=config,
                 )
+                incidents_processed.append(res)
+
                 if incident_output.exists():
-                    size_mb = incident_output.stat().st_size / (1024 * 1024)
-                    click.echo(f"  Incident metrics r{res}: {incident_output} ({size_mb:.1f} MB)")
+                    inc_size = incident_output.stat().st_size / (1024 * 1024)
+                    click.echo(f"    ✓ Incident metrics: {inc_size:.1f} MB")
+                if mapping_output.exists():
+                    map_size = mapping_output.stat().st_size / (1024 * 1024)
+                    click.echo(f"    ✓ Incident mapping: {map_size:.1f} MB")
+            except Exception as e:
+                logger.exception(f"Failed to process incidents for resolution {res}")
+                click.echo(f"    ✗ Error: {e}", err=True)
+
+        if incidents_processed:
+            click.echo(f"\n✓ Processed incidents for resolutions: {incidents_processed}")
         else:
-            click.echo(f"\nNo incidents file found at {incidents_file}, skipping incident metrics")
-    except Exception as e:
-        logger.exception("H3 aggregation failed")
-        click.echo(f"Error: {e}", err=True)
-        ctx.exit(1)
+            click.echo("\nAll incident files already exist, skipping incident processing")
+    else:
+        click.echo(f"\nNo incidents file found at {incidents_file}, skipping incident metrics")
 
 
 @main.command()
