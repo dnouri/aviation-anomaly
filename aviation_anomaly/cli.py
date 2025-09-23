@@ -551,8 +551,8 @@ def aggregate(
 @click.option(
     "--output-dir",
     type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
-    default=Path("data/tiles/geojson"),
-    help="Directory for GeoJSON output",
+    default=Path("data/tiles"),
+    help="Directory for tile output (GeoJSON and PMTiles)",
 )
 @click.option(
     "--resolutions",
@@ -560,22 +560,84 @@ def aggregate(
     type=click.IntRange(3, 7),
     help="H3 resolutions to export (default: 3-7)",
 )
+@click.option(
+    "--skip-geojson",
+    is_flag=True,
+    default=False,
+    help="Skip GeoJSON generation if files already exist",
+)
+@click.option(
+    "--pmtiles",
+    is_flag=True,
+    default=False,
+    help="Also generate PMTiles using Tippecanoe",
+)
 @click.pass_context
-def tiles(ctx: click.Context, h3_dir: Path, output_dir: Path, resolutions: tuple[int, ...]) -> None:
-    """Generate tiles from H3 aggregations for map visualization."""
+def tiles(
+    ctx: click.Context,
+    h3_dir: Path,
+    output_dir: Path,
+    resolutions: tuple[int, ...],
+    skip_geojson: bool,
+    pmtiles: bool,
+) -> None:
+    """Generate tiles from H3 aggregations for map visualization.
+
+    First exports H3 data to GeoJSON, then optionally generates PMTiles
+    using Tippecanoe for efficient web map rendering.
+    """
+    from aviation_anomaly.pmtiles_generation import (
+        check_tippecanoe_installed,
+        generate_pmtiles_for_resolutions,
+    )
     from aviation_anomaly.tile_generation import export_h3_files_to_geojson
 
     # Convert resolutions tuple to list, or use default
     res_list = list(resolutions) if resolutions else None
 
-    click.echo(f"Exporting H3 data from {h3_dir} to {output_dir}")
-    if res_list:
-        click.echo(f"Resolutions: {res_list}")
+    # Set up directories
+    geojsonl_dir = output_dir / "geojsonl"
+    pmtiles_dir = output_dir / "pmtiles"
 
-    export_h3_files_to_geojson(h3_dir, output_dir, res_list)
+    # Generate GeoJSONL files
+    if not skip_geojson:
+        click.echo(f"Exporting H3 data from {h3_dir} to {geojsonl_dir}")
+        if res_list:
+            click.echo(f"Resolutions: {res_list}")
 
-    click.echo(f"\nGeoJSON files written to {output_dir}")
-    click.echo("Next step: Run tippecanoe to generate PMTiles")
+        export_h3_files_to_geojson(h3_dir, geojsonl_dir, res_list)
+        click.echo(f"✓ GeoJSONL files written to {geojsonl_dir}")
+    else:
+        click.echo(f"Skipping GeoJSONL generation (using existing files in {geojsonl_dir})")
+
+    # Generate PMTiles if requested
+    if pmtiles:
+        if not check_tippecanoe_installed():
+            click.echo("\n⚠️  Tippecanoe is not installed. Cannot generate PMTiles.", err=True)
+            click.echo("Install it from: https://github.com/mapbox/tippecanoe", err=True)
+            ctx.exit(1)
+
+        click.echo(f"\nGenerating PMTiles in {pmtiles_dir}")
+
+        try:
+            results = generate_pmtiles_for_resolutions(
+                geojson_dir=geojsonl_dir,
+                output_dir=pmtiles_dir,
+                resolutions=res_list,
+            )
+
+            if results:
+                click.echo("✓ PMTiles generation complete:")
+                for res, path in results.items():
+                    size_mb = path.stat().st_size / (1024 * 1024)
+                    click.echo(f"  Resolution {res}: {path.name} ({size_mb:.1f} MB)")
+            else:
+                click.echo("⚠️  No PMTiles generated. Check logs for errors.", err=True)
+        except Exception as e:
+            click.echo(f"Error generating PMTiles: {e}", err=True)
+            ctx.exit(1)
+    else:
+        click.echo("\nTo generate PMTiles, run with --pmtiles flag")
 
 
 @main.command()

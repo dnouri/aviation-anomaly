@@ -1,6 +1,5 @@
 """Tile generation for map visualization."""
 
-import json
 import logging
 from pathlib import Path
 
@@ -19,35 +18,32 @@ def export_h3_to_geojson(
     incidents_table: str | None,
     output_file: Path,
 ) -> None:
-    """Export H3 cells to GeoJSON format.
+    """Export H3 cells to GeoJSONL format.
+
+    Outputs newline-delimited GeoJSON (one feature per line) for memory-efficient
+    streaming and processing of large datasets.
 
     Args:
         conn: DuckDB connection with h3 and spatial extensions loaded
         coverage_table: Name of table/view with H3 coverage data
         incidents_table: Optional name of table with H3 incident data
-        output_file: Path to write GeoJSON output
+        output_file: Path to write GeoJSONL output
     """
-    # Use SQL template with qck
-    sql_path = Path(__file__).parent / "sql" / "h3_to_geojson.sql"
+    # Use SQL template that includes the COPY TO statement
+    sql_path = Path(__file__).parent / "sql" / "h3_to_geojsonl.sql"
 
     params = {
         "coverage_table": coverage_table,
         "incidents_table": incidents_table if incidents_table else "NULL",
         "has_incidents": incidents_table is not None,
+        "output_file": str(output_file),
     }
 
-    # Execute query and get result
-    result = qck(str(sql_path), params=params, connection=conn)
+    # Ensure output directory exists
+    output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # qck returns a DuckDBPyRelation, fetch the first row
-    row = result.fetchone() if result else None
-    if row and row[0]:
-        # Parse the JSON string from DuckDB and write it formatted
-        geojson_data = json.loads(row[0])
-
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_file, "w") as f:
-            json.dump(geojson_data, f, indent=2)
+    # Execute the SQL with qck - it handles the templating and runs the COPY TO
+    qck(str(sql_path), params=params, connection=conn)
 
 
 def export_h3_files_to_geojson(
@@ -104,8 +100,8 @@ def export_h3_files_to_geojson(
                 logger.info(f"No incidents file for resolution {res}, exporting coverage only")
                 incidents_table = None
 
-            # Export to GeoJSON
-            output_file = output_dir / f"h3_r{res}.geojson"
+            # Export to compressed GeoJSONL
+            output_file = output_dir / f"h3_r{res}.geojsonl.gz"
             logger.info(f"Exporting to {output_file}")
 
             export_h3_to_geojson(
@@ -114,12 +110,14 @@ def export_h3_files_to_geojson(
 
             # Get file size and feature count for logging
             file_size_mb = output_file.stat().st_size / (1024 * 1024)
-            with open(output_file) as f:
-                feature_count = len(json.load(f)["features"])
+            import gzip
+
+            with gzip.open(output_file, "rt") as f:
+                feature_count = sum(1 for _ in f)
 
             logger.info(f"Resolution {res}: {feature_count:,} features, {file_size_mb:.1f} MB")
 
     finally:
         conn.close()
 
-    logger.info("GeoJSON export complete")
+    logger.info("GeoJSONL export complete")

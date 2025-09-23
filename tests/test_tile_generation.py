@@ -9,8 +9,8 @@ import pytest
 
 
 def test_export_h3_to_geojson_single_cell():
-    """Test exporting a single H3 cell to GeoJSON format."""
-    # RED: This test will fail because the function doesn't exist yet
+    """Test exporting a single H3 cell to GeoJSONL format."""
+    # Updated to expect GeoJSONL (newline-delimited) format
 
     # Create test data with a single H3 cell
     conn = duckdb.connect()
@@ -32,13 +32,12 @@ def test_export_h3_to_geojson_single_cell():
             ['ABC123'] as aircraft_list
     """)
 
-    # The function we're testing (doesn't exist yet)
+    # The function we're testing
     from aviation_anomaly.tile_generation import export_h3_to_geojson
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        output_file = Path(tmpdir) / "test_r3.geojson"
+        output_file = Path(tmpdir) / "test_r3.geojsonl.gz"
 
-        # This should fail initially (RED)
         export_h3_to_geojson(
             conn,
             coverage_table="test_coverage",
@@ -49,14 +48,17 @@ def test_export_h3_to_geojson_single_cell():
         # Verify the output
         assert output_file.exists()
 
-        # Load and validate GeoJSON structure
-        with open(output_file) as f:
-            geojson = json.load(f)
+        # Load and validate GeoJSONL structure (one feature per line)
+        import gzip
 
-        assert geojson["type"] == "FeatureCollection"
-        assert len(geojson["features"]) == 1
+        with gzip.open(output_file, "rt") as f:
+            lines = f.readlines()
 
-        feature = geojson["features"][0]
+        assert len(lines) == 1, "Should have exactly one line for one feature"
+
+        # Parse the single feature (not wrapped in FeatureCollection)
+        feature = json.loads(lines[0])
+
         assert feature["type"] == "Feature"
         assert feature["geometry"]["type"] == "Polygon"
         assert len(feature["geometry"]["coordinates"]) > 0
@@ -109,16 +111,20 @@ def test_export_h3_with_incidents():
     from aviation_anomaly.tile_generation import export_h3_to_geojson
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        output_file = Path(tmpdir) / "test_r3_with_incidents.geojson"
+        output_file = Path(tmpdir) / "test_r3_with_incidents.geojsonl.gz"
 
         export_h3_to_geojson(
             conn, coverage_table="test_coverage", incidents_table="test_incidents", output_file=output_file
         )
 
-        with open(output_file) as f:
-            geojson = json.load(f)
+        # Read GeoJSONL format
+        import gzip
 
-        feature = geojson["features"][0]
+        with gzip.open(output_file, "rt") as f:
+            lines = f.readlines()
+
+        assert len(lines) == 1
+        feature = json.loads(lines[0])
         props = feature["properties"]
 
         # Coverage properties
@@ -169,19 +175,25 @@ def test_export_coverage_without_incidents():
     from aviation_anomaly.tile_generation import export_h3_to_geojson
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        output_file = Path(tmpdir) / "test_partial_incidents.geojson"
+        output_file = Path(tmpdir) / "test_partial_incidents.geojsonl.gz"
 
         export_h3_to_geojson(
             conn, coverage_table="test_coverage", incidents_table="test_incidents", output_file=output_file
         )
 
-        with open(output_file) as f:
-            geojson = json.load(f)
+        # Read GeoJSONL format
+        import gzip
 
-        assert len(geojson["features"]) == 2
+        with gzip.open(output_file, "rt") as f:
+            lines = f.readlines()
+
+        assert len(lines) == 2, "Should have two features"
+
+        # Parse all features
+        features = [json.loads(line) for line in lines]
 
         # Find the cell without incidents
-        for feature in geojson["features"]:
+        for feature in features:
             if feature["properties"]["h3_cell"] == str(cell_without_incidents):
                 # Should have coverage data but null incident data
                 assert feature["properties"]["unique_segments"] == 1
