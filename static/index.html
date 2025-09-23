@@ -173,8 +173,8 @@
                     source: 'osm'
                 }]
             },
-            center: [0, 20],
-            zoom: 3
+            center: [-98, 39],  // Center on USA
+            zoom: 5  // Start at zoom level where tiles are available
         });
         
         // Make map accessible for tests
@@ -184,7 +184,7 @@
             // Add PMTiles source for H3 data
             map.addSource('h3-tiles', {
                 type: 'vector',
-                url: 'pmtiles:///tiles/h3_r4.pmtiles'
+                url: 'pmtiles:///tiles/h3_r5.pmtiles'
             });
             
             // Add layer for H3 cells
@@ -193,7 +193,7 @@
                 id: 'h3-cells',
                 type: 'fill',
                 source: 'h3-tiles',
-                'source-layer': 'h3_r4',  // Layer name from the GeoJSONL file
+                'source-layer': 'h3_cells',  // Standardized layer name for all resolutions
                 paint: {
                     'fill-color': [
                         'interpolate',

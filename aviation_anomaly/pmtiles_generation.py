@@ -56,6 +56,7 @@ def build_tippecanoe_command(
         "tippecanoe",
         "-o",
         str(output_file),
+        "--layer=h3_cells",  # Standardize layer name across all resolutions
         f"--minimum-zoom={min_zoom}",
         f"--maximum-zoom={max_zoom}",
         "--maximum-tile-features=10000",  # Limit features per tile for size control
@@ -138,18 +139,22 @@ def generate_pmtiles(
         )
     else:
         # Preserve key attributes for visualization
+        # These must match exactly what's in the GeoJSONL
         key_attributes = [
             "h3_cell",
             "h3_res",
+            "incidents_unique",
+            "incidents_coverage",
+            "unique_flights",
+            "incident_rate",
+            "predominant_emergency_type",
+            "emergency_types_list",
+            "emergency_type_diversity",
+            "total_segments",
             "unique_segments",
             "unique_aircraft",
             "total_points",
-            "incidents_unique",
-            "incidents_coverage",
             "aircraft_with_incidents",
-            "confidence_score",
-            "rate_per_1000",
-            "coverage_rate_per_1000",
         ]
         cmd = build_tippecanoe_command(
             input_file=input_file,
