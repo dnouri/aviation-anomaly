@@ -253,6 +253,7 @@ For each period (week for prototype) and H3 **resolution r ∈ {3..7}**:
 
 **Output**
 - `/aggregates/res=r{r}/aggregates_YYYYMM.parquet` (+ MANIFEST.toml)
+- `/aggregates/res=r{r}/incident_h3_mapping_r{r}.parquet` (incident_id ↔ h3_cell lookup for API)
 
 ### 4.4 Stage‑4 Tile Build (PMTiles/MVT)
 
@@ -524,6 +525,7 @@ def test_temporal_quality_gate(emergency_segment, run_incident_detection):
 ### 6.2 Drill‑Down Data (per cell, per month)
 
 - **Implementation**: Click CLI with embedded FastAPI server.
+- **Data Architecture**: Pre-computed `incident_h3_mapping_r{r}.parquet` tables enable fast lookups (incident_id ↔ h3_cell).
 - GET `/api/drilldown?month=YYYY-MM&h3_res=r&h3_index=hex&sq=all|7500|7600|7700&limit=200&offset=0`
 **Response**:
 ```json

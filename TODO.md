@@ -395,6 +395,7 @@
   - GREEN: Calculate both rate types ✓
   - Test: Verify metric differences ✓
   - COMPLETE: CLI integration wired, SQL moved to h3_incident_metrics.sql ✓
+  - ENHANCEMENT: Added incident_h3_mapping tables for drill-down API ✓
 
 - [x] **Calculate coverage quality (points-per-flight only)**
   - RED: Test missing coverage metrics ✓
@@ -437,9 +438,10 @@
 **Manual QC Checklist**:
 - [x] H3 segment aggregation works (756M points across 5 resolutions)
 - [x] H3 incident aggregation works with dual metrics (joins incidents with segments)
+- [x] Incident-to-H3 mapping tables generated for drill-down API support
 - [x] Resolution scaling works (r3: 5K cells to r7: 5M cells)
 - [x] Performance fixed (removed ORDER BY in LIST operations)
-- [x] All 107 tests passing
+- [x] All tests passing (including new mapping tests)
 - [x] Type checking passes
 - [x] Linting complete (with automatic fixes applied)
 

@@ -156,10 +156,11 @@ def compute_dual_incident_metrics(
     config: Config | None = None,
 ) -> None:
     """
-    Compute dual incident metrics for H3 cells.
+    Compute dual incident metrics for H3 cells and incident-to-H3 mapping.
 
-    - incidents_unique: Count of unique incidents per cell (for rate calculation)
-    - incidents_coverage: Count of all incident observations (for heatmap visualization)
+    Generates two outputs:
+    1. H3 incident metrics (aggregated statistics per cell)
+    2. Incident-to-H3 mapping (lookup table for drill-down queries)
 
     Args:
         incidents_file: Path to incidents Parquet file
@@ -176,21 +177,33 @@ def compute_dual_incident_metrics(
     if config is None:
         config = Config.from_file(Path("config.toml"))
 
-    # Prepare SQL parameters
-    sql_path = Path(__file__).parent / "sql" / "h3_incident_metrics.sql"
+    # Apply DuckDB configuration
+    conn = create_configured_connection(config, extensions=["h3"])
 
+    # Generate metrics (existing behavior)
+    sql_metrics_path = Path(__file__).parent / "sql" / "h3_incident_metrics.sql"
     params = {
         "incidents_file": str(incidents_file),
         "segments_file": str(segments_file),
         "output_file": str(output_file),
         "resolution": resolution,
     }
-
-    # Apply DuckDB configuration and execute SQL
-    conn = create_configured_connection(config, extensions=["h3"])
-    qck(str(sql_path), params=params, connection=conn)
-    conn.close()
+    qck(str(sql_metrics_path), params=params, connection=conn)
     logger.info(f"Dual incident metrics computed: {output_file}")
+
+    # Generate incident-to-H3 mapping (new behavior)
+    sql_mapping_path = Path(__file__).parent / "sql" / "incident_h3_mapping.sql"
+    mapping_file = output_file.parent / f"incident_h3_mapping_r{resolution}.parquet"
+    mapping_params = {
+        "incidents_file": str(incidents_file),
+        "segments_file": str(segments_file),
+        "output_file": str(mapping_file),
+        "resolution": resolution,
+    }
+    qck(str(sql_mapping_path), params=mapping_params, connection=conn)
+    logger.info(f"Incident-to-H3 mapping computed: {mapping_file}")
+
+    conn.close()
 
 
 def aggregate_incidents_by_type(

@@ -1,4 +1,4 @@
-"""Tests for H3 dual incident metrics."""
+"""Tests for H3 dual incident metrics and incident-to-H3 mapping."""
 
 import tempfile
 from pathlib import Path
@@ -213,3 +213,52 @@ class TestH3DualMetrics:
             assert inc_7500 == 0, "No 7500 incidents in test data"
             assert inc_7600 >= 0, "Should have 7600 count"
             assert inc_7700 >= 0, "Should have 7700 count"
+
+    def test_incident_to_h3_mapping_generation(self, test_incidents_file: Path, test_segments_file: Path) -> None:
+        """Test that incident-to-H3 mapping table is generated alongside metrics."""
+        from aviation_anomaly.h3_aggregation import compute_dual_incident_metrics
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            metrics_file = output_dir / "h3_incidents_r5.parquet"
+            mapping_file = output_dir / "incident_h3_mapping_r5.parquet"
+
+            # Run aggregation (should produce both metrics and mapping)
+            compute_dual_incident_metrics(
+                incidents_file=test_incidents_file,
+                segments_file=test_segments_file,
+                output_file=metrics_file,
+                resolution=5,
+            )
+
+            # Check metrics file exists (existing behavior)
+            assert metrics_file.exists(), "Metrics file should be created"
+
+            # Check mapping file exists (NEW behavior - will be RED)
+            assert mapping_file.exists(), "Mapping file should be created"
+
+            # Verify mapping structure
+            conn = duckdb.connect(":memory:")
+            result = conn.execute(f"""
+                SELECT
+                    COUNT(*) as row_count,
+                    COUNT(DISTINCT incident_id) as unique_incidents,
+                    COUNT(DISTINCT h3_cell) as unique_cells
+                FROM read_parquet('{mapping_file}')
+            """).fetchone()
+
+            assert result is not None
+            row_count, unique_incidents, unique_cells = result
+
+            # We have 2 test incidents
+            assert unique_incidents == 2, "Should map both test incidents"
+            assert unique_cells > 0, "Should have H3 cells"
+            assert row_count >= unique_incidents, "Can have multiple cells per incident"
+
+            # Verify schema
+            schema = conn.execute(f"DESCRIBE SELECT * FROM '{mapping_file}'").fetchall()
+            column_names = [col[0] for col in schema]
+
+            assert "incident_id" in column_names
+            assert "h3_cell" in column_names
+            assert "h3_res" in column_names
