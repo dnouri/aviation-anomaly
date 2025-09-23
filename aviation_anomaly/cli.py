@@ -710,11 +710,30 @@ def tiles(
     type=int,
     help="Port to bind to (default: 8000)",
 )
+@click.option(
+    "--reload",
+    is_flag=True,
+    default=False,
+    help="Enable auto-reload for development",
+)
 @click.pass_context
-def serve(ctx: click.Context, host: str, port: int) -> None:
-    """Start the API server for drill-down queries."""
-    click.echo(f"Starting server on {host}:{port}")
-    click.echo("Server not yet implemented")
+def serve(ctx: click.Context, host: str, port: int, reload: bool) -> None:
+    """Start the API server for drill-down queries.
+
+    Provides HTTP endpoints for querying H3 cell summaries and incident details.
+    Access the interactive API documentation at http://HOST:PORT/docs
+    """
+    import uvicorn
+
+    from aviation_anomaly.api import create_app
+
+    click.echo(f"Starting Aviation Anomaly Tracker API on {host}:{port}")
+    click.echo(f"Interactive API docs: http://{host}:{port}/docs")
+    click.echo(f"OpenAPI schema: http://{host}:{port}/openapi.json")
+    click.echo("Press CTRL+C to stop the server")
+
+    app = create_app()
+    uvicorn.run(app, host=host, port=port, reload=reload)
 
 
 if __name__ == "__main__":

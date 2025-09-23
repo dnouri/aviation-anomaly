@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+from fastapi import FastAPI, HTTPException, Query, Response
 from qck import qck
 
 from aviation_anomaly.config import Config
@@ -257,3 +258,75 @@ def export_h3_incidents_to_csv(
             writer.writerow(csv_row)
 
     return output.getvalue()
+
+
+def create_app() -> FastAPI:
+    """Create and configure the FastAPI application."""
+    app = FastAPI(
+        title="Aviation Anomaly Tracker API",
+        description="API for querying aviation emergency incidents aggregated to H3 cells",
+        version="0.1.0",
+    )
+
+    @app.get("/health")
+    def health_check() -> dict[str, str]:
+        """Simple health check endpoint."""
+        return {"status": "ok"}
+
+    @app.get("/api/h3/summary")
+    def get_h3_summary(
+        h3_cell: str = Query(..., description="H3 cell identifier"),
+        resolution: int = Query(..., ge=3, le=7, description="H3 resolution (3-7)"),
+        emergency_type: str | None = Query(None, pattern="^(7500|7600|7700)$", description="Emergency type filter"),
+    ) -> dict[str, Any]:
+        """Get summary statistics for an H3 cell."""
+        result = query_h3_cell_summary(
+            h3_cell=h3_cell,
+            resolution=resolution,
+            emergency_type=emergency_type,
+        )
+
+        if result is None:
+            raise HTTPException(status_code=404, detail="H3 cell not found")
+
+        return result
+
+    @app.get("/api/h3/incidents")
+    def get_h3_incidents(
+        h3_cell: str = Query(..., description="H3 cell identifier"),
+        resolution: int = Query(..., ge=3, le=7, description="H3 resolution (3-7)"),
+        emergency_type: str | None = Query(None, pattern="^(7500|7600|7700)$", description="Emergency type filter"),
+        limit: int = Query(200, le=1000, description="Maximum results"),
+        offset: int = Query(0, ge=0, description="Pagination offset"),
+    ) -> dict[str, Any]:
+        """Get individual incidents within an H3 cell."""
+        return query_h3_cell_incidents(
+            h3_cell=h3_cell,
+            resolution=resolution,
+            emergency_type=emergency_type,
+            limit=limit,
+            offset=offset,
+        )
+
+    @app.get("/api/h3/incidents.csv")
+    def export_incidents_csv(
+        h3_cell: str = Query(..., description="H3 cell identifier"),
+        resolution: int = Query(..., ge=3, le=7, description="H3 resolution (3-7)"),
+        emergency_type: str | None = Query(None, pattern="^(7500|7600|7700)$", description="Emergency type filter"),
+        limit: int = Query(200, le=1000, description="Maximum results"),
+    ) -> Response:
+        """Export incidents as CSV."""
+        csv_content = export_h3_incidents_to_csv(
+            h3_cell=h3_cell,
+            resolution=resolution,
+            emergency_type=emergency_type,
+            limit=limit,
+        )
+
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=incidents_h3_{h3_cell}_r{resolution}.csv"},
+        )
+
+    return app

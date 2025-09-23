@@ -490,7 +490,7 @@
 
 ---
 
-## Phase 7: API Development ☐
+## Phase 7: API Development ✅
 
 **Goal**: Create drill-down API for incident details.
 
@@ -515,11 +515,11 @@
   - Test: CSV format validation ✓
   - REFACTOR: Clean field mapping and imports ✓
 
-- [ ] **Create FastAPI wrapper**
-  - RED: Test API server missing
-  - GREEN: Embed FastAPI in Click CLI
-  - GREEN: Add proper routes and OpenAPI docs
-  - Test: HTTP endpoint validation
+- [x] **Create FastAPI wrapper**
+  - RED: Test API server missing ✓
+  - GREEN: Embed FastAPI in Click CLI ✓
+  - GREEN: Add proper routes and OpenAPI docs ✓
+  - Test: HTTP endpoint validation ✓
 
 **Implementation Notes**:
 - Created `query_h3_cell_summary` for aggregate data queries
@@ -527,8 +527,19 @@
 - Functions use pre-computed incident_h3_mapping tables for efficiency
 - Proper input validation and SQL injection protection
 - Returns empty results for invalid inputs (fail-safe)
+- FastAPI app with health check and three API endpoints
+- OpenAPI documentation at /docs
+- Server embedded in CLI serve command with uvicorn
 
-**Commit Message**: `feat: add drill-down API with FastAPI`
+**Manual QC Checklist**:
+- [x] All 10 FastAPI tests passing
+- [x] Server starts with `aviation-anomaly serve`
+- [x] Health endpoint returns OK
+- [x] API validation works correctly
+- [x] OpenAPI docs accessible at /docs
+- [x] CSV export works properly
+
+**Commit Message**: `feat: add FastAPI wrapper with embedded server in CLI`
 
 ---
 
