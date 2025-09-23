@@ -4,42 +4,32 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+from qck import qck
+
+from aviation_anomaly.config import Config
+from aviation_anomaly.data_access import create_configured_connection
 
 # Data directories
 H3_DATA_DIR = Path("data/h3")
 INCIDENTS_DIR = Path("data/incidents")
 
-# SQL query for cell summary - uses named columns for clarity
-CELL_SUMMARY_QUERY = """
-    SELECT
-        h3_cell,
-        h3_res,
-        incidents_unique,
-        incidents_coverage,
-        unique_flights,
-        incident_rate,
-        emergency_types_list,
-        emergency_type_diversity,
-        predominant_emergency_type
-    FROM '{h3_file}'
-    WHERE h3_cell = {h3_cell_int}
-"""
-
 
 def query_h3_cell_summary(
-    conn: duckdb.DuckDBPyConnection,
-    h3_cell: str,
-    resolution: int,
+    conn: duckdb.DuckDBPyConnection | None = None,
+    h3_cell: str = "",
+    resolution: int = 5,
     emergency_type: str | None = None,
+    config: Config | None = None,
 ) -> dict[str, Any] | None:
     """
     Query summary data for a specific H3 cell.
 
     Args:
-        conn: DuckDB connection
+        conn: Optional DuckDB connection (will create if not provided)
         h3_cell: H3 cell identifier (string representation of UBIGINT)
         resolution: H3 resolution (3-7)
         emergency_type: Optional filter by emergency type (7500/7600/7700)
+        config: Optional configuration object
 
     Returns:
         Dictionary with cell summary data, or None if cell not found
@@ -61,51 +51,70 @@ def query_h3_cell_summary(
         # Invalid H3 cell format
         return None
 
-    # Build query
-    query = CELL_SUMMARY_QUERY.format(h3_file=h3_file, h3_cell_int=h3_cell_int)
+    # Load configuration if not provided
+    if config is None:
+        config = Config()
 
-    # Add optional emergency type filter
-    if emergency_type:
-        query += f" AND '{emergency_type}' = ANY(emergency_types_list)"
+    # Use provided connection or create a configured one
+    if conn is None:
+        conn = create_configured_connection(config)
+        close_conn = True
+    else:
+        close_conn = False
 
-    # Execute query
-    result = conn.execute(query).fetchone()
-
-    if not result:
-        return None
-
-    # Return as dictionary with clear field mapping
-    return {
-        "h3_cell": str(result[0]),  # Convert UBIGINT to string
-        "h3_res": result[1],
-        "incidents_unique": result[2],
-        "incidents_coverage": result[3],
-        "unique_flights": result[4],
-        "incident_rate": result[5],
-        "emergency_types_list": result[6],
-        "emergency_type_diversity": result[7],
-        "predominant_emergency_type": result[8],
+    # Prepare SQL parameters
+    sql_path = Path(__file__).parent / "sql" / "h3_cell_summary.sql"
+    params = {
+        "h3_file": str(h3_file),
+        "h3_cell": h3_cell_int,
+        "emergency_type": emergency_type,
     }
+
+    try:
+        # Execute query using qck - returns results directly
+        result = qck(str(sql_path), params=params, connection=conn).fetchone()
+
+        if not result:
+            return None
+
+        # Return as dictionary with clear field mapping
+        return {
+            "h3_cell": str(result[0]),  # Convert UBIGINT to string
+            "h3_res": result[1],
+            "incidents_unique": result[2],
+            "incidents_coverage": result[3],
+            "unique_flights": result[4],
+            "incident_rate": result[5],
+            "emergency_types_list": result[6],
+            "emergency_type_diversity": result[7],
+            "predominant_emergency_type": result[8],
+        }
+
+    finally:
+        if close_conn:
+            conn.close()
 
 
 def query_h3_cell_incidents(
-    conn: duckdb.DuckDBPyConnection,
-    h3_cell: str,
-    resolution: int,
+    conn: duckdb.DuckDBPyConnection | None = None,
+    h3_cell: str = "",
+    resolution: int = 5,
     emergency_type: str | None = None,
     limit: int = 200,
     offset: int = 0,
+    config: Config | None = None,
 ) -> dict[str, Any]:
     """
     Query individual incidents within an H3 cell.
 
     Args:
-        conn: DuckDB connection
+        conn: Optional DuckDB connection (will create if not provided)
         h3_cell: H3 cell identifier
         resolution: H3 resolution (3-7)
         emergency_type: Optional filter by emergency type (7500/7600/7700)
         limit: Maximum number of results (default 200)
         offset: Offset for pagination (default 0)
+        config: Optional configuration object
 
     Returns:
         Dictionary with metadata and incident rows
@@ -131,59 +140,56 @@ def query_h3_cell_incidents(
     # Use the most recent incidents file
     incidents_file = incident_files[-1]
 
-    # Build query to get incident details
-    query = f"""
-        WITH cell_incidents AS (
-            SELECT DISTINCT incident_id
-            FROM '{mapping_file}'
-            WHERE h3_cell = {h3_cell_int}
-        )
-        SELECT
-            i.incident_id,
-            i.start_time,
-            i.end_time,
-            i.emergency_type,
-            i.icao24,
-            i.confidence_score,
-            i.duration_seconds
-        FROM '{incidents_file}' i
-        JOIN cell_incidents ci ON i.incident_id = ci.incident_id
-    """
+    # Load configuration if not provided
+    if config is None:
+        config = Config()
 
-    # Add emergency type filter if specified
-    if emergency_type:
-        query += f" WHERE i.emergency_type = '{emergency_type}'"
+    # Use provided connection or create a configured one
+    if conn is None:
+        conn = create_configured_connection(config)
+        close_conn = True
+    else:
+        close_conn = False
 
-    # Add ordering and pagination
-    query += f"""
-        ORDER BY i.start_time DESC
-        LIMIT {limit}
-        OFFSET {offset}
-    """
-
-    # Execute query
-    results = conn.execute(query).fetchall()
-
-    # Format results
-    rows = []
-    for row in results:
-        rows.append(
-            {
-                "incident_id": row[0],
-                "start_time": row[1],
-                "end_time": row[2],
-                "emergency_type": row[3],
-                "icao24": row[4],
-                "confidence_score": row[5],
-                "duration_seconds": row[6],
-            }
-        )
-
-    return {
-        "meta": {
-            "count": len(rows),
-            "h3_cell": h3_cell,
-            "resolution": resolution,
-        },
-        "rows": rows,
+    # Prepare SQL parameters
+    sql_path = Path(__file__).parent / "sql" / "h3_cell_incidents.sql"
+    params = {
+        "mapping_file": str(mapping_file),
+        "incidents_file": str(incidents_file),
+        "h3_cell": h3_cell_int,
+        "emergency_type": emergency_type,
+        "limit": limit,
+        "offset": offset,
     }
+
+    try:
+        # Execute query using qck - returns all results
+        results = qck(str(sql_path), params=params, connection=conn).fetchall()
+
+        # Format results
+        rows = []
+        for row in results:
+            rows.append(
+                {
+                    "incident_id": row[0],
+                    "start_time": row[1],
+                    "end_time": row[2],
+                    "emergency_type": row[3],
+                    "icao24": row[4],
+                    "confidence_score": row[5],
+                    "duration_seconds": row[6],
+                }
+            )
+
+        return {
+            "meta": {
+                "count": len(rows),
+                "h3_cell": h3_cell,
+                "resolution": resolution,
+            },
+            "rows": rows,
+        }
+
+    finally:
+        if close_conn:
+            conn.close()

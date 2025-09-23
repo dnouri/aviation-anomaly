@@ -15,7 +15,8 @@ def test_query_h3_cell_incidents():
     # Should return empty list if no data
     result = query_h3_cell_incidents(conn=conn, h3_cell="999999999999999999", resolution=4)
 
-    assert result == {"meta": {"count": 0}, "rows": []}
+    assert result["meta"]["count"] == 0
+    assert result["rows"] == []
 
 
 def test_query_h3_cell_incidents_with_data():
