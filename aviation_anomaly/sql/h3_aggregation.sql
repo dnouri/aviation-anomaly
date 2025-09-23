@@ -31,8 +31,8 @@ COPY (
             COUNT(DISTINCT segment_id) as unique_segments,
             COUNT(DISTINCT icao24) as unique_aircraft,
             COUNT(*) as total_points,
-            LIST(DISTINCT segment_id ORDER BY segment_id) as segment_list,
-            LIST(DISTINCT icao24 ORDER BY icao24) as aircraft_list
+            LIST(DISTINCT segment_id) as segment_list,
+            LIST(DISTINCT icao24) as aircraft_list
         FROM segment_cells
         GROUP BY h3_cell
     )
@@ -46,6 +46,5 @@ COPY (
         segment_list,
         aircraft_list
     FROM cell_aggregates
-    ORDER BY h3_cell
     
 ) TO '{{ output_file }}' (FORMAT PARQUET, COMPRESSION 'zstd')

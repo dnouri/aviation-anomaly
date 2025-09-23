@@ -130,71 +130,22 @@ def compute_coverage_metrics(
     if config is None:
         config = Config.from_file(Path("config.toml"))
 
+    # Prepare SQL parameters
+    sql_path = Path(__file__).parent / "sql" / "h3_coverage_metrics.sql"
+
+    params = {
+        "segment_file": str(segment_file),
+        "output_file": str(output_file),
+        "resolution": resolution,
+    }
+
+    # Execute SQL pipeline
     conn = create_configured_connection(config, extensions=["h3"])
-
-    # Compute coverage metrics with points-per-flight
-    conn.execute(f"""
-        COPY (
-            WITH segment_cells AS (
-                SELECT
-                    segment_id,
-                    icao24,
-                    point_count,
-                    list_distinct(
-                        list_transform(
-                            points,
-                            p -> h3_latlng_to_cell(p.lat, p.lon, {resolution})
-                        )
-                    ) as h3_cells,
-                    len(list_distinct(
-                        list_transform(
-                            points,
-                            p -> h3_latlng_to_cell(p.lat, p.lon, {resolution})
-                        )
-                    )) as num_cells
-                FROM read_parquet('{segment_file}')
-                WHERE point_count >= 2
-            ),
-            cell_coverage AS (
-                SELECT
-                    UNNEST(h3_cells) as h3_cell,
-                    segment_id,
-                    point_count,
-                    num_cells
-                FROM segment_cells
-            ),
-            coverage_metrics AS (
-                SELECT
-                    h3_cell,
-                    COUNT(DISTINCT segment_id) as unique_segments,
-                    -- Points-per-flight metric
-                    PERCENTILE_CONT(0.5) WITHIN GROUP (
-                        ORDER BY CAST(point_count AS DOUBLE) / num_cells
-                    ) as median_points_per_cell,
-                    AVG(CAST(point_count AS DOUBLE) / num_cells) as avg_points_per_cell,
-                    -- Coverage category based on median points-per-flight
-                    CASE
-                        WHEN PERCENTILE_CONT(0.5) WITHIN GROUP (
-                            ORDER BY CAST(point_count AS DOUBLE) / num_cells
-                        ) >= 10 THEN 'excellent'
-                        WHEN PERCENTILE_CONT(0.5) WITHIN GROUP (
-                            ORDER BY CAST(point_count AS DOUBLE) / num_cells
-                        ) >= 6 THEN 'good'
-                        WHEN PERCENTILE_CONT(0.5) WITHIN GROUP (
-                            ORDER BY CAST(point_count AS DOUBLE) / num_cells
-                        ) >= 3 THEN 'limited'
-                        ELSE 'poor'
-                    END as coverage_category
-                FROM cell_coverage
-                GROUP BY h3_cell
-            )
-            SELECT * FROM coverage_metrics
-            ORDER BY h3_cell
-        ) TO '{output_file}' (FORMAT PARQUET, COMPRESSION 'zstd')
-    """)
-
-    conn.close()
-    logger.info(f"Coverage metrics computed: {output_file}")
+    try:
+        qck(str(sql_path), params=params, connection=conn)
+        logger.info(f"Coverage metrics computed: {output_file}")
+    finally:
+        conn.close()
 
 
 def compute_dual_incident_metrics(
@@ -225,92 +176,19 @@ def compute_dual_incident_metrics(
     if config is None:
         config = Config.from_file(Path("config.toml"))
 
+    # Prepare SQL parameters
+    sql_path = Path(__file__).parent / "sql" / "h3_incident_metrics.sql"
+
+    params = {
+        "incidents_file": str(incidents_file),
+        "segments_file": str(segments_file),
+        "output_file": str(output_file),
+        "resolution": resolution,
+    }
+
+    # Apply DuckDB configuration and execute SQL
     conn = create_configured_connection(config, extensions=["h3"])
-
-    # Compute dual metrics
-    conn.execute(f"""
-        COPY (
-            -- First, get H3 cells for incidents
-            WITH incident_cells AS (
-                SELECT
-                    i.incident_id,
-                    i.icao24,
-                    i.squawk_code,
-                    h3_latlng_to_cell(p.lat, p.lon, {resolution}) as h3_cell
-                FROM (
-                    SELECT
-                        incident_id,
-                        icao24,
-                        squawk_code,
-                        UNNEST(points) as p
-                    FROM read_parquet('{incidents_file}')
-                ) i
-            ),
-
-            -- Count unique incidents per cell
-            incident_unique_counts AS (
-                SELECT
-                    h3_cell,
-                    COUNT(DISTINCT incident_id) as incidents_unique
-                FROM incident_cells
-                GROUP BY h3_cell
-            ),
-
-            -- Count all incident observations (for coverage/heatmap)
-            incident_coverage_counts AS (
-                SELECT
-                    h3_cell,
-                    COUNT(*) as incidents_coverage
-                FROM incident_cells
-                GROUP BY h3_cell
-            ),
-
-            -- Get flight counts from segments
-            segment_cells AS (
-                SELECT
-                    s.segment_id,
-                    h3_latlng_to_cell(p.lat, p.lon, {resolution}) as h3_cell
-                FROM (
-                    SELECT segment_id, UNNEST(points) as p
-                    FROM read_parquet('{segments_file}')
-                ) s
-            ),
-            flight_counts AS (
-                SELECT
-                    h3_cell,
-                    COUNT(DISTINCT segment_id) as flights
-                FROM segment_cells
-                GROUP BY h3_cell
-            ),
-
-            -- Combine metrics
-            combined AS (
-                SELECT
-                    COALESCE(iu.h3_cell, ic.h3_cell, f.h3_cell) as h3_cell,
-                    COALESCE(iu.incidents_unique, 0) as incidents_unique,
-                    COALESCE(ic.incidents_coverage, 0) as incidents_coverage,
-                    COALESCE(f.flights, 0) as flights,
-                    -- Calculate rates (parts per million)
-                    CASE
-                        WHEN COALESCE(f.flights, 0) > 0
-                        THEN (CAST(COALESCE(iu.incidents_unique, 0) AS DOUBLE) / f.flights) * 1000000
-                        ELSE 0
-                    END as rate_unique_ppm,
-                    CASE
-                        WHEN COALESCE(f.flights, 0) > 0
-                        THEN (CAST(COALESCE(ic.incidents_coverage, 0) AS DOUBLE) / f.flights) * 1000000
-                        ELSE 0
-                    END as rate_coverage_ppm
-                FROM incident_unique_counts iu
-                FULL OUTER JOIN incident_coverage_counts ic ON iu.h3_cell = ic.h3_cell
-                FULL OUTER JOIN flight_counts f ON COALESCE(iu.h3_cell, ic.h3_cell) = f.h3_cell
-            )
-
-            SELECT * FROM combined
-            ORDER BY h3_cell
-        ) TO '{output_file}' (FORMAT PARQUET, COMPRESSION 'zstd')
-    """)
-
+    qck(str(sql_path), params=params, connection=conn)
     conn.close()
     logger.info(f"Dual incident metrics computed: {output_file}")
 
@@ -340,44 +218,23 @@ def aggregate_incidents_by_type(
     if config is None:
         config = Config.from_file(Path("config.toml"))
 
+    # Prepare SQL parameters
+    sql_path = Path(__file__).parent / "sql" / "h3_incident_by_type.sql"
+
+    params = {
+        "incidents_file": str(incidents_file),
+        "segments_file": str(segments_file),
+        "output_file": str(output_file),
+        "resolution": resolution,
+    }
+
+    # Execute SQL pipeline
     conn = create_configured_connection(config, extensions=["h3"])
-
-    # Aggregate by squawk type
-    conn.execute(f"""
-        COPY (
-            WITH incident_cells AS (
-                SELECT
-                    i.incident_id,
-                    i.squawk_code,
-                    h3_latlng_to_cell(p.lat, p.lon, {resolution}) as h3_cell
-                FROM (
-                    SELECT
-                        incident_id,
-                        squawk_code,
-                        UNNEST(points) as p
-                    FROM read_parquet('{incidents_file}')
-                ) i
-            ),
-
-            -- Count by type
-            type_counts AS (
-                SELECT
-                    h3_cell,
-                    COUNT(DISTINCT CASE WHEN squawk_code = '7500' THEN incident_id END) as incidents_7500,
-                    COUNT(DISTINCT CASE WHEN squawk_code = '7600' THEN incident_id END) as incidents_7600,
-                    COUNT(DISTINCT CASE WHEN squawk_code = '7700' THEN incident_id END) as incidents_7700,
-                    COUNT(DISTINCT incident_id) as incidents_all
-                FROM incident_cells
-                GROUP BY h3_cell
-            )
-
-            SELECT * FROM type_counts
-            ORDER BY h3_cell
-        ) TO '{output_file}' (FORMAT PARQUET, COMPRESSION 'zstd')
-    """)
-
-    conn.close()
-    logger.info(f"Incidents aggregated by type: {output_file}")
+    try:
+        qck(str(sql_path), params=params, connection=conn)
+        logger.info(f"Incidents aggregated by type: {output_file}")
+    finally:
+        conn.close()
 
 
 def apply_visibility_thresholds(
@@ -403,17 +260,19 @@ def apply_visibility_thresholds(
     if config is None:
         config = Config.from_file(Path("config.toml"))
 
+    # Prepare SQL parameters
+    sql_path = Path(__file__).parent / "sql" / "h3_visibility_filter.sql"
+
+    params = {
+        "aggregates_file": str(aggregates_file),
+        "output_file": str(output_file),
+        "min_flights": min_flights,
+    }
+
+    # Execute SQL pipeline (no H3 extension needed for filtering)
     conn = create_configured_connection(config)
-
-    # Apply threshold filtering
-    conn.execute(f"""
-        COPY (
-            SELECT *
-            FROM read_parquet('{aggregates_file}')
-            WHERE unique_segments >= {min_flights}
-            ORDER BY h3_cell
-        ) TO '{output_file}' (FORMAT PARQUET, COMPRESSION 'zstd')
-    """)
-
-    conn.close()
-    logger.info(f"Visibility thresholds applied: {output_file}")
+    try:
+        qck(str(sql_path), params=params, connection=conn)
+        logger.info(f"Visibility thresholds applied: {output_file}")
+    finally:
+        conn.close()

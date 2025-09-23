@@ -19,45 +19,42 @@ class TestH3DualMetrics:
 
         output = tmp_path / "test_incidents.parquet"
 
-        # Create test incidents
-        # Incident 1: Crosses 3 H3 cells at res 5
-        # Incident 2: Crosses 2 H3 cells at res 5, one overlapping with incident 1
+        # Create test incidents (without points - they reference segments)
         conn.execute(f"""
             COPY (
                 SELECT
                     'inc1' as incident_id,
                     'seg1' as segment_id,
                     'abc123' as icao24,
+                    '7700' as emergency_type,
                     1700000000 as start_time,
                     1700000900 as end_time,
                     900 as duration_seconds,
-                    '7700' as squawk_code,
+                    100.0 as total_samples,
+                    0.0 as ground_percentage,
                     75 as confidence_score,
-                    'high' as confidence_category,
-                    -- Points that will cross multiple H3 cells
-                    [
-                        {{'time': 1700000000, 'lat': 51.5074, 'lon': -0.1278}},
-                        {{'time': 1700000300, 'lat': 51.5174, 'lon': -0.1178}},
-                        {{'time': 1700000600, 'lat': 51.5274, 'lon': -0.1078}},
-                        {{'time': 1700000900, 'lat': 51.5374, 'lon': -0.0978}}
-                    ] as points
+                    'high' as confidence_level,
+                    false as has_roller_dial,
+                    NULL::VARCHAR[] as roller_dial_codes,
+                    CURRENT_DATE as processing_date,
+                    CURRENT_TIMESTAMP as detected_at
                 UNION ALL
                 SELECT
                     'inc2' as incident_id,
                     'seg2' as segment_id,
                     'def456' as icao24,
+                    '7600' as emergency_type,
                     1700001000 as start_time,
                     1700001600 as end_time,
                     600 as duration_seconds,
-                    '7600' as squawk_code,
+                    80.0 as total_samples,
+                    0.0 as ground_percentage,
                     60 as confidence_score,
-                    'medium' as confidence_category,
-                    -- Points that partially overlap with incident 1
-                    [
-                        {{'time': 1700001000, 'lat': 51.5274, 'lon': -0.1078}},
-                        {{'time': 1700001300, 'lat': 51.5374, 'lon': -0.0978}},
-                        {{'time': 1700001600, 'lat': 51.5474, 'lon': -0.0878}}
-                    ] as points
+                    'medium' as confidence_level,
+                    false as has_roller_dial,
+                    NULL::VARCHAR[] as roller_dial_codes,
+                    CURRENT_DATE as processing_date,
+                    CURRENT_TIMESTAMP as detected_at
             ) TO '{output}' (FORMAT PARQUET)
         """)
 
@@ -72,23 +69,52 @@ class TestH3DualMetrics:
 
         output = tmp_path / "test_segments_coverage.parquet"
 
-        # Create segments that pass through same cells
+        # Create segments (including those referenced by incidents)
         conn.execute(f"""
             COPY (
-                -- 5 segments passing through same area
+                -- Segment for incident 1
                 SELECT
-                    'seg' || CAST(n AS VARCHAR) as segment_id,
-                    'plane' || CAST(n AS VARCHAR) as icao24,
-                    1700000000 + CAST(n * 1000 AS BIGINT) as start_time,
-                    1700000600 + CAST(n * 1000 AS BIGINT) as end_time,
+                    'seg1' as segment_id,
+                    'abc123' as icao24,
+                    1700000000 as start_time,
+                    1700000900 as end_time,
+                    900 as duration_seconds,
+                    4 as point_count,
+                    [
+                        {{'time': 1700000000, 'lat': 51.5074, 'lon': -0.1278, 'squawk': '7700', 'onground': false, 'alert': true, 'callsign': 'TEST1'}},
+                        {{'time': 1700000300, 'lat': 51.5174, 'lon': -0.1178, 'squawk': '7700', 'onground': false, 'alert': true, 'callsign': 'TEST1'}},
+                        {{'time': 1700000600, 'lat': 51.5274, 'lon': -0.1078, 'squawk': '7700', 'onground': false, 'alert': true, 'callsign': 'TEST1'}},
+                        {{'time': 1700000900, 'lat': 51.5374, 'lon': -0.0978, 'squawk': '7700', 'onground': false, 'alert': true, 'callsign': 'TEST1'}}
+                    ] as points
+                UNION ALL
+                -- Segment for incident 2
+                SELECT
+                    'seg2' as segment_id,
+                    'def456' as icao24,
+                    1700001000 as start_time,
+                    1700001600 as end_time,
                     600 as duration_seconds,
                     3 as point_count,
                     [
-                        {{'time': 1700000000 + CAST(n * 1000 AS BIGINT), 'lat': 51.5074 + CAST(n * 0.001 AS DOUBLE), 'lon': -0.1278, 'squawk': NULL, 'onground': false, 'alert': false, 'callsign': 'TEST' || CAST(n AS VARCHAR)}},
-                        {{'time': 1700000300 + CAST(n * 1000 AS BIGINT), 'lat': 51.5174 + CAST(n * 0.001 AS DOUBLE), 'lon': -0.1178, 'squawk': NULL, 'onground': false, 'alert': false, 'callsign': 'TEST' || CAST(n AS VARCHAR)}},
-                        {{'time': 1700000600 + CAST(n * 1000 AS BIGINT), 'lat': 51.5274 + CAST(n * 0.001 AS DOUBLE), 'lon': -0.1078, 'squawk': NULL, 'onground': false, 'alert': false, 'callsign': 'TEST' || CAST(n AS VARCHAR)}}
+                        {{'time': 1700001000, 'lat': 51.5274, 'lon': -0.1078, 'squawk': '7600', 'onground': false, 'alert': true, 'callsign': 'TEST2'}},
+                        {{'time': 1700001300, 'lat': 51.5374, 'lon': -0.0978, 'squawk': '7600', 'onground': false, 'alert': true, 'callsign': 'TEST2'}},
+                        {{'time': 1700001600, 'lat': 51.5474, 'lon': -0.0878, 'squawk': '7600', 'onground': false, 'alert': true, 'callsign': 'TEST2'}}
                     ] as points
-                FROM generate_series(1, 5) t(n)
+                UNION ALL
+                -- Additional normal segments
+                SELECT
+                    'seg' || CAST(n + 2 AS VARCHAR) as segment_id,
+                    'plane' || CAST(n AS VARCHAR) as icao24,
+                    1700002000 + CAST(n * 1000 AS BIGINT) as start_time,
+                    1700002600 + CAST(n * 1000 AS BIGINT) as end_time,
+                    600 as duration_seconds,
+                    3 as point_count,
+                    [
+                        {{'time': 1700002000 + CAST(n * 1000 AS BIGINT), 'lat': 51.5074 + CAST(n * 0.001 AS DOUBLE), 'lon': -0.1278, 'squawk': NULL, 'onground': false, 'alert': false, 'callsign': 'TEST' || CAST(n+2 AS VARCHAR)}},
+                        {{'time': 1700002300 + CAST(n * 1000 AS BIGINT), 'lat': 51.5174 + CAST(n * 0.001 AS DOUBLE), 'lon': -0.1178, 'squawk': NULL, 'onground': false, 'alert': false, 'callsign': 'TEST' || CAST(n+2 AS VARCHAR)}},
+                        {{'time': 1700002600 + CAST(n * 1000 AS BIGINT), 'lat': 51.5274 + CAST(n * 0.001 AS DOUBLE), 'lon': -0.1078, 'squawk': NULL, 'onground': false, 'alert': false, 'callsign': 'TEST' || CAST(n+2 AS VARCHAR)}}
+                    ] as points
+                FROM generate_series(1, 3) t(n)
             ) TO '{output}' (FORMAT PARQUET)
         """)
 
@@ -98,7 +124,7 @@ class TestH3DualMetrics:
     def test_dual_incident_metrics(
         self, test_incidents_file: Path, test_segments_file: Path, duckdb_conn: duckdb.DuckDBPyConnection
     ) -> None:
-        """Test computation of dual incident metrics."""
+        """Test computation of dual incident metrics with emergency type aggregation."""
         from aviation_anomaly.h3_aggregation import compute_dual_incident_metrics
 
         output_file = Path(tempfile.gettempdir()) / "h3_dual_metrics.parquet"
@@ -114,9 +140,11 @@ class TestH3DualMetrics:
                 h3_cell,
                 incidents_unique,
                 incidents_coverage,
-                flights,
-                rate_unique_ppm,
-                rate_coverage_ppm
+                unique_flights,
+                incident_rate,
+                emergency_types_list,
+                emergency_type_diversity,
+                predominant_emergency_type
             FROM read_parquet('{output_file}')
             WHERE incidents_unique > 0 OR incidents_coverage > 0
             ORDER BY h3_cell
@@ -126,19 +154,22 @@ class TestH3DualMetrics:
 
         # Check that metrics are computed correctly
         for row in result:
-            h3_cell, inc_unique, inc_coverage, flights, rate_unique, rate_coverage = row
+            h3_cell, inc_unique, inc_coverage, flights, incident_rate, types_list, type_div, predominant = row
 
             # incidents_unique counts unique incidents per cell (for rate calculation)
             # incidents_coverage counts all incident observations (for heatmap)
             assert inc_coverage >= inc_unique, "Coverage should be >= unique"
 
-            # Rates should be calculated correctly (parts per million)
+            # Rate should be calculated correctly
             if flights > 0:
-                expected_rate_unique = (inc_unique / flights) * 1_000_000
-                expected_rate_coverage = (inc_coverage / flights) * 1_000_000
+                expected_rate = inc_unique / flights
+                assert abs(incident_rate - expected_rate) < 0.001, "Incident rate calculation"
 
-                assert abs(rate_unique - expected_rate_unique) < 0.1, "Unique rate calculation"
-                assert abs(rate_coverage - expected_rate_coverage) < 0.1, "Coverage rate calculation"
+            # Verify emergency type fields
+            if inc_unique > 0:
+                assert types_list is not None, "Should have emergency types list"
+                assert type_div >= 1, "Should have at least one emergency type"
+                assert predominant in ["7500", "7600", "7700"], "Predominant type should be valid"
 
         # Verify overlapping cells have correct counts
         # Cell with 2 incidents should have incidents_unique=2, incidents_coverage may be higher

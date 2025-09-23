@@ -73,3 +73,83 @@ def test_cli_groups_exist():
         command_names = main.list_commands(click.Context(main))
         # For now, might be empty, but structure should exist
         assert isinstance(command_names, list)
+
+
+def test_aggregate_command_with_incidents(tmp_path, test_config_file):
+    """Test that aggregate command processes incidents when available."""
+
+    import duckdb
+
+    # Create test data directories
+    segments_dir = tmp_path / "data" / "segments"
+    segments_dir.mkdir(parents=True)
+    incidents_dir = tmp_path / "data" / "incidents"
+    incidents_dir.mkdir(parents=True)
+
+    # Create minimal segment file
+    segments_file = segments_dir / "segments_2025-07-02.parquet"
+    conn = duckdb.connect()
+    conn.execute(f"""
+        COPY (
+            SELECT
+                'seg1' as segment_id,
+                'abc123' as icao24,
+                1751400000 as start_time,
+                1751400600 as end_time,
+                600 as duration_seconds,
+                2 as point_count,
+                [
+                    {{'time': 1751400000, 'lat': 51.5, 'lon': -0.1, 'squawk': '7700'}},
+                    {{'time': 1751400600, 'lat': 51.51, 'lon': -0.09, 'squawk': '7700'}}
+                ] as points
+        ) TO '{segments_file}' (FORMAT PARQUET)
+    """)
+
+    # Create minimal incident file
+    incidents_file = incidents_dir / "incidents_2025-07-02.parquet"
+    conn.execute(f"""
+        COPY (
+            SELECT
+                'inc1' as incident_id,
+                'seg1' as segment_id,
+                'abc123' as icao24,
+                '7700' as emergency_type,
+                1751400000 as start_time,
+                1751400600 as end_time,
+                600 as duration_seconds,
+                10 as total_samples,
+                0.0 as ground_percentage,
+                85 as confidence_score,
+                'HIGH' as confidence_level,
+                false as has_roller_dial
+        ) TO '{incidents_file}' (FORMAT PARQUET)
+    """)
+    conn.close()
+
+    # Run aggregate command
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        import os
+
+        os.chdir(tmp_path)
+
+        result = runner.invoke(
+            main,
+            [
+                "--config",
+                str(test_config_file),
+                "aggregate",
+                "--segment-file",
+                str(segments_file),
+                "--output-dir",
+                str(tmp_path / "h3"),
+                "--resolutions",
+                "5",
+            ],
+        )
+
+        # Should succeed
+        assert result.exit_code == 0, f"Command failed: {result.output}"
+
+        # Should mention processing incidents
+        assert "incident" in result.output.lower(), "Should mention processing incidents"

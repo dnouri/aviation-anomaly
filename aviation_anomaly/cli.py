@@ -1,11 +1,14 @@
 """Command-line interface for Aviation Anomaly Tracker."""
 
 import datetime
+import logging
 from pathlib import Path
 
 import click
 
 from aviation_anomaly.config import Config, ConfigError
+
+logger = logging.getLogger(__name__)
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -424,10 +427,118 @@ def detect(
 
 
 @main.command()
+@click.option(
+    "--segment-file",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path to segment Parquet file",
+)
+@click.option(
+    "--incidents-file",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path to incidents Parquet file (auto-detected if not provided)",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(path_type=Path),
+    default=Path("data/h3"),
+    help="Directory for H3 aggregation output (default: data/h3)",
+)
+@click.option(
+    "--resolutions",
+    default="3,4,5,6,7",
+    help="Comma-separated H3 resolutions (default: 3,4,5,6,7)",
+)
 @click.pass_context
-def aggregate(ctx: click.Context) -> None:
-    """Aggregate data to H3 hexagonal cells."""
-    click.echo("Aggregation not yet implemented")
+def aggregate(
+    ctx: click.Context,
+    segment_file: Path | None,
+    incidents_file: Path | None,
+    output_dir: Path,
+    resolutions: str,
+) -> None:
+    """Aggregate segments to H3 hexagonal cells at multiple resolutions."""
+    from aviation_anomaly.h3_aggregation import compute_h3_coverage_multi_resolution
+
+    # Parse resolutions
+    resolution_list = [int(r.strip()) for r in resolutions.split(",")]
+
+    # Auto-detect segment file if not provided
+    if segment_file is None:
+        segment_dir = Path("data/segments")
+        if segment_dir.exists():
+            segment_files = sorted(segment_dir.glob("segments_*.parquet"))
+            if segment_files:
+                segment_file = segment_files[-1]  # Use most recent
+                click.echo(f"Using segment file: {segment_file}")
+            else:
+                click.echo("Error: No segment files found in data/segments/", err=True)
+                ctx.exit(1)
+        else:
+            click.echo("Error: No segment file provided and data/segments/ doesn't exist", err=True)
+            ctx.exit(1)
+
+    if not segment_file.exists():
+        click.echo(f"Error: Segment file not found: {segment_file}", err=True)
+        ctx.exit(1)
+
+    click.echo(f"Computing H3 aggregation for resolutions: {resolution_list}")
+    click.echo(f"Input: {segment_file}")
+    click.echo(f"Output directory: {output_dir}")
+
+    # Load config
+    config = ctx.obj["config"]
+
+    # Run aggregation
+    try:
+        results = compute_h3_coverage_multi_resolution(
+            segment_file=segment_file,
+            output_dir=output_dir,
+            resolutions=resolution_list,
+            config=config,
+        )
+
+        click.echo("\nAggregation complete. Output files:")
+        for res, path in results.items():
+            if path.exists():
+                size_mb = path.stat().st_size / (1024 * 1024)
+                click.echo(f"  Resolution {res}: {path} ({size_mb:.1f} MB)")
+
+        # Determine incidents file to process
+        if incidents_file is None:
+            # Auto-detect based on segment filename
+            segment_date = segment_file.stem.replace("segments_", "")
+            incidents_dir = segment_file.parent.parent / "incidents"
+            incidents_file = incidents_dir / f"incidents_{segment_date}.parquet"
+
+            # Only process if auto-detected file exists
+            process_incidents = incidents_file.exists()
+        else:
+            # Explicit file provided - always process
+            process_incidents = True
+
+        if process_incidents:
+            click.echo(f"\nProcessing incidents from: {incidents_file}")
+            from aviation_anomaly.h3_aggregation import compute_dual_incident_metrics
+
+            # Process incidents for each resolution
+            for res in resolution_list:
+                incident_output = output_dir / f"h3_incidents_r{res}.parquet"
+                compute_dual_incident_metrics(
+                    incidents_file=incidents_file,
+                    segments_file=segment_file,
+                    output_file=incident_output,
+                    resolution=res,
+                    config=config,
+                )
+                if incident_output.exists():
+                    size_mb = incident_output.stat().st_size / (1024 * 1024)
+                    click.echo(f"  Incident metrics r{res}: {incident_output} ({size_mb:.1f} MB)")
+        else:
+            click.echo(f"\nNo incidents file found at {incidents_file}, skipping incident metrics")
+    except Exception as e:
+        logger.exception("H3 aggregation failed")
+        click.echo(f"Error: {e}", err=True)
+        ctx.exit(1)
 
 
 @main.command()

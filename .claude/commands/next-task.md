@@ -2,6 +2,7 @@ Remind yourself of our principles and methodology in CLAUDE.md and discuss them.
 
 - Don't mask errors in tests. Always fix at the right place.
 - When you encounter failing tests, do proper root cause analysis. This will usually involve creating a minimal test case to reproduce the problem and disect it.
+- Prefer testing against real or realistic data. Create spikes in tmp/ to inspect relevant data available in data/ to help you figure out data structure and distribution.
 - When writing tests, look at existing test structure, including existing pytest fixtures in conftest.py. Also consider using pytest's monkeypath and tmp_path over other ways of patching.
 - Prefer testing against real objects and data over creating mocks where possible.
 - Don't write overly defensive code: fail fast.
