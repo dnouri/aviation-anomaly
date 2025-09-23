@@ -4,17 +4,20 @@ from pathlib import Path
 
 import duckdb
 import pytest
+
 from aviation_anomaly.api import query_h3_cell_summary
 
 
-def test_query_h3_cell_summary_not_implemented():
-    """RED test: query_h3_cell_summary function doesn't exist yet."""
-    # This should fail because the function doesn't exist
+def test_query_h3_cell_summary_exists():
+    """Test that query_h3_cell_summary function exists and is callable."""
+    # Verify the function is imported and callable
     conn = duckdb.connect()
 
-    with pytest.raises(AttributeError):
-        # Function doesn't exist yet
-        query_h3_cell_summary(conn=conn, h3_cell="594627166885380095", resolution=4)
+    # Function should exist and be callable (may return None for missing data)
+    result = query_h3_cell_summary(conn=conn, h3_cell="nonexistent", resolution=4)
+
+    # It's OK if it returns None for a non-existent cell
+    assert result is None or isinstance(result, dict)
 
 
 def test_query_h3_cell_returns_summary_data():

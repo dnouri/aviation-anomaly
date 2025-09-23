@@ -500,18 +500,32 @@
 
 ### Tasks
 
-- [ ] **Implement drill-down endpoint**
-  - RED: Test endpoint not found
-  - GREEN: Query incidents by cell/period
-  - GREEN: Include quality metadata
-  - GREEN: Pagination support
-  - Test: Response format validation
+- [x] **Implement drill-down endpoint**
+  - RED: Test endpoint not found ✓
+  - GREEN: Query incidents by cell/period ✓
+  - GREEN: Include quality metadata ✓
+  - GREEN: Pagination support ✓
+  - Test: Response format validation ✓
+  - REFACTOR: Extract constants, improve readability ✓
 
 - [ ] **Add export capabilities**
   - RED: Test CSV export missing
   - GREEN: Generate CSV with full metadata
   - GREEN: Size limits (max 200 rows)
   - Test: CSV format validation
+
+- [ ] **Create FastAPI wrapper**
+  - RED: Test API server missing
+  - GREEN: Embed FastAPI in Click CLI
+  - GREEN: Add proper routes and OpenAPI docs
+  - Test: HTTP endpoint validation
+
+**Implementation Notes**:
+- Created `query_h3_cell_summary` for aggregate data queries
+- Created `query_h3_cell_incidents` for detailed incident drill-down
+- Functions use pre-computed incident_h3_mapping tables for efficiency
+- Proper input validation and SQL injection protection
+- Returns empty results for invalid inputs (fail-safe)
 
 **Commit Message**: `feat: add drill-down API with FastAPI`
 
