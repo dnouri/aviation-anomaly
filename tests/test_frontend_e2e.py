@@ -111,9 +111,18 @@ class TestFrontendE2E:
         # Give PMTiles time to load
         time.sleep(2)
 
-        # Check that H3 source and layer were added
-        has_source = page.evaluate("window.map && window.map.getSource('h3-tiles') !== undefined")
-        assert has_source, "H3 tiles source not found"
+        # Check that all 5 resolution sources were loaded
+        sources_loaded = page.evaluate("""
+            () => {
+                const results = [];
+                for (let res = 3; res <= 7; res++) {
+                    const source = window.map.getSource(`h3-tiles-r${res}`);
+                    if (source) results.push(res);
+                }
+                return results;
+            }
+        """)
+        assert len(sources_loaded) == 5, f"Expected 5 sources, found {len(sources_loaded)}"
 
         has_layer = page.evaluate("window.map && window.map.getLayer('h3-cells') !== undefined")
         assert has_layer, "H3 cells layer not found"
@@ -175,3 +184,67 @@ class TestFrontendE2E:
         assert legend_text is not None
         # Check for some indication of scale (rates, incidents, etc.)
         assert any(word in legend_text.lower() for word in ["incident", "rate", "emergency", "low", "high"])
+
+    def test_resolution_switches_with_zoom(self, page: Page, live_server: str):
+        """Test that H3 resolution changes appropriately with zoom level."""
+        page.goto(f"{live_server}/")
+
+        # Wait for map to initialize
+        page.wait_for_selector("#map canvas", timeout=5000)
+        time.sleep(2)
+
+        # Test zoom level 3 → resolution 3
+        page.evaluate("window.map.setZoom(3)")
+        time.sleep(1)
+        resolution = page.evaluate("window.currentResolution")
+        assert resolution == 3, f"Expected resolution 3 at zoom 3, got {resolution}"
+
+        # Test zoom level 7 → resolution 7
+        page.evaluate("window.map.setZoom(7)")
+        time.sleep(1)
+        resolution = page.evaluate("window.currentResolution")
+        assert resolution == 7, f"Expected resolution 7 at zoom 7, got {resolution}"
+
+        # Test zoom level 10 → resolution 7 (highest available)
+        page.evaluate("window.map.setZoom(10)")
+        time.sleep(1)
+        resolution = page.evaluate("window.currentResolution")
+        assert resolution == 7, f"Expected resolution 7 at zoom 10, got {resolution}"
+
+        # Verify resolution indicator updates
+        indicator = page.locator("#current-resolution")
+        expect(indicator).to_have_text("7")
+
+    def test_filter_persists_across_resolution_changes(self, page: Page, live_server: str):
+        """Test that emergency type filters persist when resolution changes."""
+        page.goto(f"{live_server}/")
+
+        # Wait for map to initialize
+        page.wait_for_selector("#map canvas", timeout=5000)
+        time.sleep(2)
+
+        # Apply a filter
+        page.select_option("#squawk-filter", "7700")
+        time.sleep(0.5)
+
+        # Verify filter is applied
+        initial_filter = page.evaluate("""
+            () => {
+                const layer = window.map.getLayer('h3-cells');
+                return layer ? JSON.stringify(layer.filter) : null;
+            }
+        """)
+        assert "7700" in initial_filter, "Filter not applied correctly"
+
+        # Change zoom to trigger resolution change
+        page.evaluate("window.map.setZoom(3)")
+        time.sleep(1)
+
+        # Verify filter is still applied after resolution change
+        filter_after_switch = page.evaluate("""
+            () => {
+                const layer = window.map.getLayer('h3-cells');
+                return layer ? JSON.stringify(layer.filter) : null;
+            }
+        """)
+        assert initial_filter == filter_after_switch, "Filter was not preserved across resolution change"
