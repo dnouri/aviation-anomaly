@@ -9,7 +9,7 @@ SELECT
     h3_res,
     incidents_unique,
     incidents_coverage,
-    unique_flights,
+    unique_segments,
     incident_rate,
     emergency_types_list,
     emergency_type_diversity,

@@ -65,7 +65,7 @@ COPY (
     flight_counts AS (
         SELECT
             h3_latlng_to_cell(p.lat, p.lon, {{ resolution }}) as h3_cell,
-            COUNT(DISTINCT s.icao24) as unique_flights,
+            COUNT(DISTINCT s.segment_id) as unique_segments,
             COUNT(DISTINCT s.segment_id) as total_segments
         FROM (
             SELECT segment_id, icao24, UNNEST(points) as p
@@ -83,16 +83,16 @@ COPY (
             COALESCE(iu.incidents_unique, 0) as incidents_unique,
             COALESCE(iu.aircraft_with_incidents, 0) as aircraft_with_incidents,
             COALESCE(ic.incidents_coverage, 0) as incidents_coverage,
-            COALESCE(f.unique_flights, 0) as unique_flights,
+            COALESCE(f.unique_segments, 0) as unique_segments,
             COALESCE(f.total_segments, 0) as total_segments,
             -- Emergency type fields
             iu.emergency_types_list,
             COALESCE(iu.emergency_type_diversity, 0) as emergency_type_diversity,
             iu.predominant_emergency_type,
             -- Calculate rates
-            CASE 
-                WHEN COALESCE(f.unique_flights, 0) > 0 
-                THEN CAST(COALESCE(iu.incidents_unique, 0) AS FLOAT) / f.unique_flights
+            CASE
+                WHEN COALESCE(f.unique_segments, 0) > 0
+                THEN CAST(COALESCE(iu.incidents_unique, 0) AS FLOAT) / f.unique_segments
                 ELSE NULL
             END as incident_rate
         FROM incident_unique_counts iu

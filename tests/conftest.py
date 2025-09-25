@@ -475,6 +475,50 @@ def landing_emergency_segment(emergency_segment):
 
 
 @pytest.fixture
+def h3_test_data(tmp_path: Path, monkeypatch) -> Path:
+    """Create mock H3 incident data for testing.
+
+    Creates a parquet file with predictable H3 aggregation data
+    matching the schema from h3_incidents_r4.parquet.
+    """
+    import duckdb
+
+    conn = duckdb.connect()
+    conn.execute("INSTALL h3; LOAD h3")
+
+    h3_file = tmp_path / "h3_incidents_r4.parquet"
+
+    # Create test data with known values
+    conn.execute(f"""
+        COPY (
+            SELECT * FROM (VALUES
+                -- Cell with mixed emergency types
+                (594627166885380095, 4, 3, 2, 1, 100, 150,
+                 ['7700', '7600'], 2, '7700', 0.03),
+                -- Cell with only 7500 (hijack)
+                (594627184065249279, 4, 1, 1, 0, 50, 75,
+                 ['7500'], 1, '7500', 0.02),
+                -- Cell with no incidents but has segments
+                (594627218424987647, 4, 0, 0, 0, 200, 250,
+                 CAST([] AS VARCHAR[]), 0, NULL, NULL)
+            ) AS t(h3_cell, h3_res, incidents_unique, aircraft_with_incidents,
+                   incidents_coverage, unique_segments, total_segments,
+                   emergency_types_list, emergency_type_diversity,
+                   predominant_emergency_type, incident_rate)
+        ) TO '{h3_file}' (FORMAT PARQUET)
+    """)
+
+    conn.close()
+
+    # Monkey-patch the API to use our test directory
+    import aviation_anomaly.api
+
+    monkeypatch.setattr(aviation_anomaly.api, "H3_DATA_DIR", tmp_path)
+
+    return h3_file
+
+
+@pytest.fixture
 def run_incident_detection():
     """Fixture to run the actual SQL incident detection pipeline."""
 

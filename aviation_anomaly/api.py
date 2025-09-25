@@ -87,7 +87,7 @@ def query_h3_cell_summary(
             "h3_res": result[1],
             "incidents_unique": result[2],
             "incidents_coverage": result[3],
-            "unique_flights": result[4],
+            "unique_segments": result[4],
             "incident_rate": result[5],
             "emergency_types_list": result[6],
             "emergency_type_diversity": result[7],

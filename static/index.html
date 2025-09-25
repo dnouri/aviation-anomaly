@@ -122,6 +122,63 @@
         .loading-indicator.visible {
             display: block;
         }
+
+        .display-mode-toggle {
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .3s;
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        input:checked + .toggle-slider {
+            background-color: #2196F3;
+        }
+
+        input:checked + .toggle-slider:before {
+            transform: translateX(26px);
+        }
+
+        #display-mode-label {
+            font-weight: 500;
+            min-width: 80px;
+        }
     </style>
 </head>
 <body>
@@ -140,6 +197,15 @@
             <option value="7600">7600 - Radio Failure</option>
             <option value="7700">7700 - General Emergency</option>
         </select>
+        <div class="display-mode-toggle">
+            <span>Display:</span>
+            <span id="display-mode-label">Absolute</span>
+            <label class="toggle-switch">
+                <input type="checkbox" id="display-mode-toggle">
+                <span class="toggle-slider"></span>
+            </label>
+            <span>Normalized</span>
+        </div>
         <div class="resolution-indicator">
             H3 Resolution: <span id="current-resolution">-</span>
             <div id="loading-indicator" class="loading-indicator">Loading tiles...</div>
@@ -147,26 +213,28 @@
     </div>
     
     <div class="legend" id="legend">
-        <h4>Incident Rate (ppm)</h4>
-        <div class="legend-item">
-            <div class="legend-color" style="background: #fee5d9;"></div>
-            <span>0 - Low</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: #fcae91;"></div>
-            <span>1-5 - Medium</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: #fb6a4a;"></div>
-            <span>5-10 - High</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: #de2d26;"></div>
-            <span>10-20 - Very High</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: #a50f15;"></div>
-            <span>20+ - Extreme</span>
+        <h4 id="legend-title">Incident Count</h4>
+        <div id="legend-items">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #fee5d9;"></div>
+                <span class="legend-label">0</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #fcae91;"></div>
+                <span class="legend-label">1-2</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #fb6a4a;"></div>
+                <span class="legend-label">3-5</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #de2d26;"></div>
+                <span class="legend-label">6-10</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a50f15;"></div>
+                <span class="legend-label">10+</span>
+            </div>
         </div>
     </div>
     
@@ -199,6 +267,7 @@
         // State management
         let currentResolution = null;
         let currentFilter = 'all';
+        let displayMode = 'absolute'; // 'absolute' or 'normalized'
         const loadedSources = {};
         
         // Initialize map
@@ -227,18 +296,35 @@
         // Make map accessible for tests
         window.map = map;
         window.currentResolution = currentResolution;
-        
-        // Color interpolation for incident rates
-        const incidentRateColors = [
+        window.displayMode = displayMode;
+
+        // Color schemes for different display modes
+        const absoluteColors = [
             'interpolate',
             ['linear'],
             ['coalesce', ['get', 'incidents_unique'], 0],
             0, '#fee5d9',
             1, '#fcae91',
-            5, '#fb6a4a',
-            10, '#de2d26',
-            20, '#a50f15'
+            3, '#fb6a4a',
+            6, '#de2d26',
+            10, '#a50f15'
         ];
+
+        const normalizedColors = [
+            'interpolate',
+            ['linear'],
+            ['*', ['coalesce', ['get', 'incident_rate'], 0], 1000000],
+            0, '#fee5d9',
+            1000, '#fcae91',
+            5000, '#fb6a4a',
+            10000, '#de2d26',
+            20000, '#a50f15'
+        ];
+
+        // Get current color scheme based on display mode
+        function getColorScheme() {
+            return displayMode === 'absolute' ? absoluteColors : normalizedColors;
+        }
         
         // Add H3 layer with current resolution and filter
         function addH3Layer(resolution, filter) {
@@ -258,7 +344,7 @@
                 source: sourceId,
                 'source-layer': 'h3_cells',
                 paint: {
-                    'fill-color': incidentRateColors,
+                    'fill-color': getColorScheme(),
                     'fill-opacity': 0.7
                 }
             };
@@ -295,16 +381,31 @@
                     const props = e.features[0].properties;
                     const details = document.getElementById('incident-details');
                     const content = document.getElementById('details-content');
-                    
-                    content.innerHTML = `
-                        <p><strong>H3 Cell:</strong> ${props.h3_cell || 'N/A'}</p>
-                        <p><strong>Incidents:</strong> ${props.incidents_unique || 0}</p>
-                        <p><strong>Flights:</strong> ${props.unique_flights || 0}</p>
-                        <p><strong>Rate:</strong> ${props.incident_rate ? props.incident_rate.toFixed(2) : 'N/A'} ppm</p>
-                        <p><strong>Coverage:</strong> ${props.incidents_coverage || 0} observations</p>
-                        <p><strong>Resolution:</strong> ${currentResolution}</p>
-                    `;
-                    
+
+                    let rateDisplay = 'N/A';
+                    if (displayMode === 'normalized' && props.incident_rate) {
+                        const ppm = props.incident_rate * 1000000;
+                        rateDisplay = `${ppm.toFixed(0)} PPM`;
+                    }
+
+                    if (displayMode === 'absolute') {
+                        content.innerHTML = `
+                            <p><strong>H3 Cell:</strong> ${props.h3_cell || 'N/A'}</p>
+                            <p><strong>Incidents:</strong> ${props.incidents_unique || 0}</p>
+                            <p><strong>Segments:</strong> ${props.unique_segments || 0}</p>
+                            <p><strong>Coverage:</strong> ${props.incidents_coverage || 0} observations</p>
+                            <p><strong>Resolution:</strong> ${currentResolution}</p>
+                        `;
+                    } else {
+                        content.innerHTML = `
+                            <p><strong>H3 Cell:</strong> ${props.h3_cell || 'N/A'}</p>
+                            <p><strong>Rate:</strong> ${rateDisplay}</p>
+                            <p><strong>Incidents:</strong> ${props.incidents_unique || 0}</p>
+                            <p><strong>Segments:</strong> ${props.unique_segments || 0}</p>
+                            <p><strong>Resolution:</strong> ${currentResolution}</p>
+                        `;
+                    }
+
                     details.classList.add('visible');
                 }
             });
@@ -435,13 +536,57 @@
             });
         });
         
+        // Update legend based on display mode
+        function updateLegend() {
+            const legendTitle = document.getElementById('legend-title');
+            const legendItems = document.querySelectorAll('.legend-label');
+
+            if (displayMode === 'absolute') {
+                legendTitle.textContent = 'Incident Count';
+                legendItems[0].textContent = '0';
+                legendItems[1].textContent = '1-2';
+                legendItems[2].textContent = '3-5';
+                legendItems[3].textContent = '6-10';
+                legendItems[4].textContent = '10+';
+            } else {
+                legendTitle.textContent = 'Incident Rate (PPM)';
+                legendItems[0].textContent = '0-1000';
+                legendItems[1].textContent = '1000-5000';
+                legendItems[2].textContent = '5000-10000';
+                legendItems[3].textContent = '10000-20000';
+                legendItems[4].textContent = '20000+';
+            }
+        }
+
+        // Handle display mode toggle
+        document.getElementById('display-mode-toggle').addEventListener('change', (e) => {
+            displayMode = e.target.checked ? 'normalized' : 'absolute';
+            window.displayMode = displayMode;
+
+            // Update label
+            document.getElementById('display-mode-label').textContent =
+                displayMode === 'absolute' ? 'Absolute' : 'Normalized';
+
+            console.log(`Display mode changed to: ${displayMode}`);
+
+            // Update legend
+            updateLegend();
+
+            // Update map layer colors
+            if (currentResolution !== null) {
+                if (map.getLayer('h3-cells')) {
+                    map.setPaintProperty('h3-cells', 'fill-color', getColorScheme());
+                }
+            }
+        });
+
         // Handle filter changes
         document.getElementById('squawk-filter').addEventListener('change', (e) => {
             const filterValue = e.target.value;
             currentFilter = filterValue;
-            
+
             console.log(`Filter changed to: ${filterValue}`);
-            
+
             // Remove and re-add the layer with new filter
             if (currentResolution !== null) {
                 if (map.getLayer('h3-cells')) {

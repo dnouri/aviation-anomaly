@@ -223,11 +223,11 @@ Record fields:
 For each period (week for prototype) and H3 **resolution r ∈ {3..7}**:
 
 **Dual Metrics Approach:**
-- `flights_unique` = Count of unique segments touching cell (denominator)
+- `unique_segments` = Count of unique segments touching cell (denominator)
 - `incidents_unique` = Count of unique incidents in cell (for rates)
 - `incidents_coverage` = Total incident-cell intersections (for heatmap) - if one incident crosses 5 cells, each cell gets incidents_coverage=1
-- `rate_unique_ppm` = `incidents_unique / flights_unique * 1e6`
-- `rate_coverage_ppm` = `incidents_coverage / flights_unique * 1e6`
+- `rate_unique_ppm` = `incidents_unique / unique_segments * 1e6`
+- `rate_coverage_ppm` = `incidents_coverage / unique_segments * 1e6`
 
 **Coverage Quality Metrics:**
 - `points_per_flight` = Total points / unique segments within each cell (calculated per cell)
@@ -488,7 +488,7 @@ def test_temporal_quality_gate(emergency_segment, run_incident_detection):
 - **Time selector**: Day view or full week
 - **Squawk filter**: All / 7500 / 7600 / 7700
 - **Coverage overlay**: Toggle on/off
-- **Confidence display**: Raw vs smoothed rates (v1.1)
+- **Display mode**: Toggle between absolute counts and normalized rates (PPM)
 - **Resolution lock**: Advanced option to fix H3 resolution
 
 **5.2.4 Drill-down Details**

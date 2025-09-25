@@ -140,7 +140,7 @@ class TestH3DualMetrics:
                 h3_cell,
                 incidents_unique,
                 incidents_coverage,
-                unique_flights,
+                unique_segments,
                 incident_rate,
                 emergency_types_list,
                 emergency_type_diversity,
@@ -258,7 +258,95 @@ class TestH3DualMetrics:
             # Verify schema
             schema = conn.execute(f"DESCRIBE SELECT * FROM '{mapping_file}'").fetchall()
             column_names = [col[0] for col in schema]
-
             assert "incident_id" in column_names
             assert "h3_cell" in column_names
             assert "h3_res" in column_names
+
+    def test_denominator_counts_segments_not_aircraft(self) -> None:
+        """Test that incident rate uses segments (not aircraft) as denominator.
+
+        This is a critical bug fix - we were dividing by unique aircraft instead of
+        unique segments, inflating rates by ~10x for typical flight patterns.
+        """
+        # Create test data with multiple segments from same aircraft
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("SET memory_limit = '100MB'")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            segments_file = Path(tmpdir) / "segments_denominator_test.parquet"
+            incidents_file = Path(tmpdir) / "incidents_denominator_test.parquet"
+            output_file = Path(tmpdir) / "h3_metrics_denominator_test.parquet"
+
+            # Create segments: 5 segments from 1 aircraft (simulating pattern work)
+            conn.execute(f"""
+                COPY (
+                    SELECT
+                        'abc123_' || n as segment_id,
+                        'abc123' as icao24,  -- SAME aircraft for all 5 segments
+                        1700000000 + n * 3600 as start_time,
+                        1700000900 + n * 3600 as end_time,
+                        900 as duration_seconds,
+                        2 as point_count,
+                        [
+                            {{'time': 1700000000 + n * 3600, 'lat': 51.5074, 'lon': -0.1278, 'squawk': '1200', 'onground': false}},
+                            {{'time': 1700000900 + n * 3600, 'lat': 51.5174, 'lon': -0.1178, 'squawk': '1200', 'onground': false}}
+                        ] as points
+                    FROM generate_series(1, 5) t(n)
+                ) TO '{segments_file}' (FORMAT PARQUET)
+            """)
+
+            # Create 1 incident from 1 of those segments
+            conn.execute(f"""
+                COPY (
+                    SELECT
+                        'inc1' as incident_id,
+                        'abc123_1' as segment_id,  -- First segment has incident
+                        'abc123' as icao24,
+                        '7700' as emergency_type,
+                        1700000000 as start_time,
+                        1700000900 as end_time,
+                        900 as duration_seconds,
+                        100.0 as total_samples,
+                        0.0 as ground_percentage,
+                        75 as confidence_score,
+                        'high' as confidence_level,
+                        false as has_roller_dial,
+                        NULL::VARCHAR[] as roller_dial_codes,
+                        CURRENT_DATE as processing_date,
+                        CURRENT_TIMESTAMP as detected_at
+                ) TO '{incidents_file}' (FORMAT PARQUET)
+            """)
+
+            # Run aggregation
+            from aviation_anomaly.h3_aggregation import compute_dual_incident_metrics
+
+            compute_dual_incident_metrics(
+                incidents_file=incidents_file,
+                segments_file=segments_file,
+                output_file=output_file,
+                resolution=5,
+            )
+
+            # Check the results
+            result = conn.execute(f"""
+                SELECT
+                    incidents_unique,
+                    unique_segments,
+                    incident_rate
+                FROM read_parquet('{output_file}')
+                WHERE incidents_unique > 0
+            """).fetchone()
+
+            assert result is not None, "Should have aggregated data"
+            incidents, segments, rate = result
+
+            # The critical assertion: denominator should be 5 (segments) not 1 (aircraft)
+            assert incidents == 1, "Should have 1 incident"
+            assert segments == 5, f"Should count 5 segments, not 1 aircraft. Got: {segments}"
+
+            # Rate should be 1/5 = 0.2, not 1/1 = 1.0
+            expected_rate = 1 / 5  # 0.2
+            assert abs(rate - expected_rate) < 0.001, f"Rate should be {expected_rate}, got {rate}"
+
+            conn.close()

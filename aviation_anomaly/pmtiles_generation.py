@@ -145,7 +145,7 @@ def generate_pmtiles(
             "h3_res",
             "incidents_unique",
             "incidents_coverage",
-            "unique_flights",
+            "unique_segments",
             "incident_rate",
             "predominant_emergency_type",
             "emergency_types_list",

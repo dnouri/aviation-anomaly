@@ -1,9 +1,6 @@
 """Tests for the drill-down API."""
 
-from pathlib import Path
-
 import duckdb
-import pytest
 
 from aviation_anomaly.api import query_h3_cell_summary
 
@@ -20,28 +17,12 @@ def test_query_h3_cell_summary_exists():
     assert result is None or isinstance(result, dict)
 
 
-def test_query_h3_cell_returns_summary_data():
+def test_query_h3_cell_returns_summary_data(h3_test_data):
     """Test that we can query summary data for a specific H3 cell."""
-    # This test will be RED until we implement the function
     conn = duckdb.connect()
 
-    # Use real test data
-    h3_incidents_file = Path("data/h3/h3_incidents_r4.parquet")
-    if not h3_incidents_file.exists():
-        pytest.skip("Test data not available")
-
-    # Find a cell with incidents
-    test_cell = conn.execute(f"""
-        SELECT h3_cell
-        FROM '{h3_incidents_file}'
-        WHERE incidents_unique > 0
-        LIMIT 1
-    """).fetchone()
-
-    if not test_cell:
-        pytest.skip("No cells with incidents in test data")
-
-    test_h3_cell = str(test_cell[0])
+    # Use fixture data with known values
+    test_h3_cell = "594627166885380095"  # Known cell from fixture
 
     # Query the cell summary
     result = query_h3_cell_summary(conn=conn, h3_cell=test_h3_cell, resolution=4)
@@ -53,12 +34,14 @@ def test_query_h3_cell_returns_summary_data():
     assert "predominant_emergency_type" in result
     assert "incident_rate" in result
 
-    # Verify values
+    # Verify known values from fixture
     assert result["h3_cell"] == test_h3_cell
-    assert result["incidents_unique"] > 0
+    assert result["incidents_unique"] == 3
+    assert result["predominant_emergency_type"] == "7700"
+    assert abs(float(result["incident_rate"]) - 0.03) < 0.001  # 3 incidents / 100 segments
 
 
-def test_query_nonexistent_cell_returns_none():
+def test_query_nonexistent_cell_returns_none(h3_test_data):
     """Test that querying a non-existent cell returns None."""
     conn = duckdb.connect()
 
@@ -68,26 +51,12 @@ def test_query_nonexistent_cell_returns_none():
     assert result is None
 
 
-def test_query_with_filter_by_emergency_type():
+def test_query_with_filter_by_emergency_type(h3_test_data):
     """Test filtering by emergency type."""
     conn = duckdb.connect()
 
-    h3_incidents_file = Path("data/h3/h3_incidents_r4.parquet")
-    if not h3_incidents_file.exists():
-        pytest.skip("Test data not available")
-
-    # Find a cell with 7700 emergencies
-    test_cell = conn.execute(f"""
-        SELECT h3_cell
-        FROM '{h3_incidents_file}'
-        WHERE '7700' = ANY(emergency_types_list)
-        LIMIT 1
-    """).fetchone()
-
-    if not test_cell:
-        pytest.skip("No cells with 7700 emergencies")
-
-    test_h3_cell = str(test_cell[0])
+    # Use known cell that has 7700 emergencies
+    test_h3_cell = "594627166885380095"
 
     # Query with filter
     result = query_h3_cell_summary(conn=conn, h3_cell=test_h3_cell, resolution=4, emergency_type="7700")
