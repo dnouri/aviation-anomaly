@@ -484,7 +484,7 @@ def h3_test_data(tmp_path: Path, monkeypatch) -> Path:
     import duckdb
 
     conn = duckdb.connect()
-    conn.execute("INSTALL h3; LOAD h3")
+    conn.execute("INSTALL h3 FROM community; LOAD h3")
 
     h3_file = tmp_path / "h3_incidents_r4.parquet"
 

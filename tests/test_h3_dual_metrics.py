@@ -14,7 +14,7 @@ class TestH3DualMetrics:
     def test_incidents_file(self, tmp_path: Path) -> Path:
         """Create test incidents with known H3 cells."""
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
         conn.execute("SET memory_limit = '100MB'")
 
         output = tmp_path / "test_incidents.parquet"
@@ -270,7 +270,7 @@ class TestH3DualMetrics:
         """
         # Create test data with multiple segments from same aircraft
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
         conn.execute("SET memory_limit = '100MB'")
 
         with tempfile.TemporaryDirectory() as tmpdir:
