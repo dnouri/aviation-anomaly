@@ -138,7 +138,7 @@ COPY (
     
     -- Calculate confidence scores based on quality gates
     confidence_scoring AS (
-        SELECT 
+        SELECT
             segment_id,
             icao24,
             emergency_type,
@@ -151,7 +151,7 @@ COPY (
             -- Base confidence from sample count (max 40 points)
             LEAST(sample_count * 2, 40) +
             -- Persistence bonus (max 30 points)
-            CASE 
+            CASE
                 WHEN persistence_seconds > 180 THEN 30
                 WHEN persistence_seconds > 120 THEN 20
                 WHEN persistence_seconds > 60 THEN 10
@@ -163,7 +163,7 @@ COPY (
             CASE WHEN list_count(roller_dial_codes) > 0 THEN -10 ELSE 10 END
             as confidence_score,
             -- Determine confidence level
-            CASE 
+            CASE
                 WHEN sample_count >= 10 AND persistence_seconds > 120 AND ground_percentage < 10
                 THEN 'HIGH'
                 WHEN sample_count >= 5 AND persistence_seconds > 60 AND ground_percentage < 20
@@ -173,10 +173,36 @@ COPY (
         FROM airborne_validation
         WHERE passes_airborne = true
     ),
+
+    -- Apply filter profile parameters
+    filtered_incidents AS (
+        SELECT *
+        FROM confidence_scoring
+        WHERE
+            -- Core confidence threshold
+            confidence_score >= {{ min_confidence | default(50) }}
+
+            -- Temporal coherence (Strategy 2)
+            AND persistence_seconds >= {{ min_duration | default(45) }}
+
+            -- Statistical outlier filtering (Strategy 1)
+            AND (
+                (emergency_type = '7500' AND sample_count <= {{ max_samples_7500 | default(99999) }})
+                OR (emergency_type = '7600' AND sample_count <= {{ max_samples_7600 | default(99999) }})
+                OR (emergency_type = '7700' AND sample_count <= {{ max_samples_7700 | default(99999) }})
+            )
+
+            -- Ensemble minimum samples (Strategy 3)
+            AND (
+                (emergency_type = '7500' AND sample_count >= {{ min_samples_7500 | default(5) }})
+                OR (emergency_type = '7600' AND sample_count >= {{ min_samples_7600 | default(5) }})
+                OR (emergency_type = '7700' AND sample_count >= {{ min_samples_7700 | default(5) }})
+            )
+    ),
     
     -- Create incident records
     incidents AS (
-        SELECT 
+        SELECT
             -- Generate unique incident ID
             icao24 || '_' || CAST(incident_start AS VARCHAR) as incident_id,
             segment_id,
@@ -194,8 +220,7 @@ COPY (
             -- Add metadata
             CAST('{{ processing_date }}' AS DATE) as processing_date,
             CURRENT_TIMESTAMP as detected_at
-        FROM confidence_scoring
-        WHERE confidence_score >= 50  -- Minimum confidence threshold
+        FROM filtered_incidents
     ),
     
     -- Apply debouncing: merge incidents within 15 minutes (optimized)

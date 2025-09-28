@@ -522,7 +522,7 @@ def h3_test_data(tmp_path: Path, monkeypatch) -> Path:
 def run_incident_detection():
     """Fixture to run the actual SQL incident detection pipeline."""
 
-    def _runner(segments_data: list[dict]) -> list[dict]:
+    def _runner(segments_data: list[dict], filter_profile: str = "none") -> list[dict]:
         """Run the actual SQL incident detection pipeline."""
         with tempfile.TemporaryDirectory() as tmpdir_str:
             tmpdir = Path(tmpdir_str)
@@ -576,6 +576,24 @@ def run_incident_detection():
                 "threads": 2,
                 "temp_directory": str(tmpdir / "duckdb_tmp"),
             }
+
+            # Add filter parameters if not using "none" profile
+            # For tests, we'll use simplified defaults
+            if filter_profile != "none":
+                if filter_profile == "production":
+                    params.update(
+                        {
+                            "min_confidence": 70,
+                            "min_duration": 120,
+                            "max_samples_7500": 430,
+                            "max_samples_7600": 379,
+                            "max_samples_7700": 224,
+                            "min_samples_7500": 186,
+                            "min_samples_7600": 163,
+                            "min_samples_7700": 116,
+                        }
+                    )
+                # Can add other profiles as needed
 
             # Create temp directory for DuckDB
             (tmpdir / "duckdb_tmp").mkdir(exist_ok=True)

@@ -6,6 +6,43 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
 
 
+class FilterProfile(BaseModel):
+    """Squawk filter profile configuration."""
+
+    name: str = Field(description="Profile name")
+    description: str = Field(default="", description="Profile description")
+
+    # Core thresholds
+    min_confidence: int = Field(default=50, description="Minimum confidence score")
+    min_duration_s: int = Field(default=45, description="Minimum duration in seconds")
+
+    # Statistical outlier thresholds (Strategy 1) - Optional
+    max_samples_7500: int | None = Field(default=None, description="Max samples for 7500")
+    max_samples_7600: int | None = Field(default=None, description="Max samples for 7600")
+    max_samples_7700: int | None = Field(default=None, description="Max samples for 7700")
+
+    # Ensemble minimum thresholds (Strategy 3)
+    min_samples_7500: int = Field(default=5, description="Min samples for 7500")
+    min_samples_7600: int = Field(default=5, description="Min samples for 7600")
+    min_samples_7700: int = Field(default=5, description="Min samples for 7700")
+
+    @field_validator("min_confidence", "min_duration_s", "min_samples_7500", "min_samples_7600", "min_samples_7700")
+    @classmethod
+    def validate_positive(cls, v: int) -> int:
+        """Ensure values are positive."""
+        if v <= 0:
+            raise ValueError("Must be positive")
+        return v
+
+    @field_validator("max_samples_7500", "max_samples_7600", "max_samples_7700")
+    @classmethod
+    def validate_optional_positive(cls, v: int | None) -> int | None:
+        """Ensure optional values are positive if set."""
+        if v is not None and v <= 0:
+            raise ValueError("Must be positive")
+        return v
+
+
 class SegmentConfig(BaseModel):
     """Configuration for flight segment processing."""
 
@@ -28,6 +65,8 @@ class IncidentConfig(BaseModel):
 
     debounce_minutes: int = Field(default=15, description="Minutes to debounce incidents")
     max_duration_cap_s: int = Field(default=5400, description="Maximum incident duration in seconds")
+    default_profile: str = Field(default="none", description="Default filter profile to use")
+    profiles: dict[str, FilterProfile] = Field(default_factory=dict, description="Filter profiles")
 
     @field_validator("debounce_minutes", "max_duration_cap_s")
     @classmethod

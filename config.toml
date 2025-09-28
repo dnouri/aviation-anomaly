@@ -17,6 +17,53 @@ batch_size = 5000
 debounce_minutes = 15
 # Maximum incident duration in seconds
 max_duration_cap_s = 5400
+# Default filter profile to use (none, production, research, high_security)
+default_profile = "production"
+
+# Filter Profile: Production (Balanced for operational systems)
+[incidents.profiles.production]
+name = "production"
+description = "Balanced filtering for operational safety systems"
+min_confidence = 70
+min_duration_s = 120
+# Statistical outlier thresholds (P75)
+max_samples_7500 = 430
+max_samples_7600 = 379
+max_samples_7700 = 224
+# Ensemble minimum thresholds (P50)
+min_samples_7500 = 186
+min_samples_7600 = 163
+min_samples_7700 = 116
+
+# Filter Profile: Research (Minimal filtering)
+[incidents.profiles.research]
+name = "research"
+description = "Minimal filtering for anomaly research and analysis"
+min_confidence = 50
+min_duration_s = 60
+# Statistical outlier thresholds (P90)
+max_samples_7500 = 993
+max_samples_7600 = 614
+max_samples_7700 = 538
+# Ensemble minimum thresholds (lenient)
+min_samples_7500 = 100
+min_samples_7600 = 86
+min_samples_7700 = 82
+
+# Filter Profile: High Security (Strict validation)
+[incidents.profiles.high_security]
+name = "high_security"
+description = "Strict filtering for high-confidence validation"
+min_confidence = 80
+min_duration_s = 180
+# Statistical outlier thresholds (strict - between P50 and P75)
+max_samples_7500 = 186
+max_samples_7600 = 163
+max_samples_7700 = 116
+# Ensemble minimum thresholds (strict - require significant samples)
+min_samples_7500 = 186
+min_samples_7600 = 163
+min_samples_7700 = 116
 
 [aggregation]
 # Minimum flights for analysis

@@ -17,7 +17,13 @@ from aviation_anomaly.logging import log_operation
 logger = logging.getLogger(__name__)
 
 
-def detect_incidents(date: datetime.date, segments_dir: Path, output_dir: Path, config: Config) -> Path:
+def detect_incidents(
+    date: datetime.date,
+    segments_dir: Path,
+    output_dir: Path,
+    config: Config,
+    filter_profile: str | None = None,
+) -> Path:
     """Detect emergency incidents from flight segments with quality gates.
 
     Processes segmented flight data to identify genuine emergency squawks
@@ -28,19 +34,22 @@ def detect_incidents(date: datetime.date, segments_dir: Path, output_dir: Path, 
     1. Temporal: 5+ samples within 60 seconds
     2. Persistence: Emergency must last >45 seconds
     3. Airborne: <30% of samples on ground
-    4. Confidence: Minimum score of 50
+    4. Confidence: Minimum score (varies by profile)
+    5. Filter profiles for squawk-specific thresholds
 
     Args:
         date: Date to process
         segments_dir: Directory containing segment files
         output_dir: Output directory for incident files
         config: Configuration object with incident parameters
+        filter_profile: Name of filter profile to use (or None for default)
 
     Returns:
         Path to created incident file
 
     Raises:
         FileNotFoundError: If segment data doesn't exist
+        ValueError: If specified filter profile doesn't exist
     """
     # Generate unique session ID for temp files
     session_id = uuid4().hex[:8]
@@ -61,12 +70,38 @@ def detect_incidents(date: datetime.date, segments_dir: Path, output_dir: Path, 
     final_path = output_dir / f"incidents_{date}.parquet"
     temp_path = output_dir / f".incidents_{session_id}.parquet"
 
-    # SQL parameters
+    # Base SQL parameters
     params = {
         "input_path": str(input_file),
         "output_path": str(temp_path),
         "processing_date": str(date),
     }
+
+    # Load filter profile and add parameters
+    if filter_profile is None:
+        filter_profile = config.incidents.default_profile
+
+    if filter_profile != "none" and filter_profile in config.incidents.profiles:
+        profile = config.incidents.profiles[filter_profile]
+
+        # Add filter parameters from profile
+        params.update(
+            {
+                "min_confidence": str(profile.min_confidence),
+                "min_duration": str(profile.min_duration_s),
+                "max_samples_7500": str(profile.max_samples_7500 or 99999),
+                "max_samples_7600": str(profile.max_samples_7600 or 99999),
+                "max_samples_7700": str(profile.max_samples_7700 or 99999),
+                "min_samples_7500": str(profile.min_samples_7500),
+                "min_samples_7600": str(profile.min_samples_7600),
+                "min_samples_7700": str(profile.min_samples_7700),
+            }
+        )
+        logger.info(f"Using filter profile: {filter_profile} ({profile.description})")
+    elif filter_profile != "none":
+        raise ValueError(f"Unknown filter profile: {filter_profile}")
+    else:
+        logger.info("No filter profile applied (using defaults)")
 
     # Create configured DuckDB connection
     conn = create_configured_connection(config)
@@ -95,7 +130,12 @@ def detect_incidents(date: datetime.date, segments_dir: Path, output_dir: Path, 
 
 
 def detect_incidents_range(
-    start: datetime.date, end: datetime.date, segments_dir: Path, output_dir: Path, config: Config
+    start: datetime.date,
+    end: datetime.date,
+    segments_dir: Path,
+    output_dir: Path,
+    config: Config,
+    filter_profile: str | None = None,
 ) -> list[Path]:
     """Detect incidents for multiple days.
 
@@ -109,6 +149,7 @@ def detect_incidents_range(
         segments_dir: Directory containing segment files
         output_dir: Output directory for incident files
         config: Configuration object with incident parameters
+        filter_profile: Name of filter profile to use (or None for default)
 
     Returns:
         List of created incident files
@@ -118,7 +159,7 @@ def detect_incidents_range(
 
     while current <= end:
         try:
-            result = detect_incidents(current, segments_dir, output_dir, config)
+            result = detect_incidents(current, segments_dir, output_dir, config, filter_profile)
             results.append(result)
             logger.info(f"Completed {current}: {result}")
         except FileNotFoundError as e:

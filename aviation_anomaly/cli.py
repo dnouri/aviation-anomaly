@@ -298,6 +298,17 @@ def segment(
     help="Output directory for incident files",
 )
 @click.option(
+    "--filter-profile",
+    type=str,
+    help="Filter profile to use (production/research/high_security/none)",
+)
+@click.option(
+    "--list-profiles",
+    is_flag=True,
+    default=False,
+    help="List available filter profiles and exit",
+)
+@click.option(
     "--stats",
     is_flag=True,
     default=False,
@@ -311,6 +322,8 @@ def detect(
     to_date: datetime.datetime | None,
     segments_dir: Path,
     output_dir: Path,
+    filter_profile: str | None,
+    list_profiles: bool,
     stats: bool,
 ) -> None:
     """Detect emergency incidents from flight segments with quality gates.
@@ -331,6 +344,17 @@ def detect(
     # Get config from context
     config = ctx.obj["config"]
 
+    # Handle --list-profiles
+    if list_profiles:
+        click.echo("Available filter profiles:")
+        if config.incidents.profiles:
+            for name, profile in config.incidents.profiles.items():
+                click.echo(f"  {name}: {profile.description}")
+        else:
+            click.echo("  No profiles configured")
+        click.echo(f"\nDefault profile: {config.incidents.default_profile}")
+        return
+
     # Validate arguments (same pattern as other commands)
     if date and (from_date or to_date):
         click.echo("Error: Use either --date or --from-date/--to-date, not both", err=True)
@@ -350,8 +374,22 @@ def detect(
         click.echo("  ✓ Airborne: <30% ground samples")
         click.echo(f"  ✓ Debounce: {config.incidents.debounce_minutes} minutes")
 
+        # Show filter profile being used
+        if filter_profile:
+            if filter_profile in config.incidents.profiles:
+                profile = config.incidents.profiles[filter_profile]
+                click.echo(f"\nFilter Profile: {filter_profile}")
+                click.echo(f"  {profile.description}")
+            else:
+                click.echo(f"  Filter: {filter_profile}")
+        else:
+            click.echo(f"\nFilter Profile: {config.incidents.default_profile} (default)")
+            if config.incidents.default_profile in config.incidents.profiles:
+                profile = config.incidents.profiles[config.incidents.default_profile]
+                click.echo(f"  {profile.description}")
+
         try:
-            output_file = detect_incidents(detect_date, segments_dir, output_dir, config)
+            output_file = detect_incidents(detect_date, segments_dir, output_dir, config, filter_profile)
         except FileNotFoundError as e:
             click.echo(f"Error: {e}", err=True)
             ctx.exit(1)
@@ -410,8 +448,22 @@ def detect(
         click.echo("  ✓ Airborne: <30% ground samples")
         click.echo(f"  ✓ Debounce: {config.incidents.debounce_minutes} minutes")
 
+        # Show filter profile being used
+        if filter_profile:
+            if filter_profile in config.incidents.profiles:
+                profile = config.incidents.profiles[filter_profile]
+                click.echo(f"\nFilter Profile: {filter_profile}")
+                click.echo(f"  {profile.description}")
+            else:
+                click.echo(f"  Filter: {filter_profile}")
+        else:
+            click.echo(f"\nFilter Profile: {config.incidents.default_profile} (default)")
+            if config.incidents.default_profile in config.incidents.profiles:
+                profile = config.incidents.profiles[config.incidents.default_profile]
+                click.echo(f"  {profile.description}")
+
         try:
-            output_files = detect_incidents_range(start, end, segments_dir, output_dir, config)
+            output_files = detect_incidents_range(start, end, segments_dir, output_dir, config, filter_profile)
         except Exception as e:
             click.echo(f"Error: {e}", err=True)
             ctx.exit(1)
