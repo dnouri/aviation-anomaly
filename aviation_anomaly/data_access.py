@@ -9,6 +9,12 @@ from trino.dbapi import Connection, connect
 from aviation_anomaly.auth import get_opensky_token
 from aviation_anomaly.config import Config
 
+# Maps extension names to their installation sources
+EXTENSION_SOURCES = {
+    "h3": "FROM community",
+    # Extensions not listed here use the default repository
+}
+
 
 class TrinoQueryEngine:
     """Engine for executing queries against OpenSky Trino database.
@@ -119,7 +125,9 @@ def create_configured_connection(config: Config, extensions: list[str] | None = 
     # Load any requested extensions
     if extensions:
         for ext in extensions:
-            conn.execute(f"INSTALL {ext}")
+            source = EXTENSION_SOURCES.get(ext, "")
+            install_cmd = f"INSTALL {ext} {source}".strip()
+            conn.execute(install_cmd)
             conn.execute(f"LOAD {ext}")
 
     return conn

@@ -14,7 +14,7 @@ def test_export_h3_to_geojson_single_cell():
 
     # Create test data with a single H3 cell
     conn = duckdb.connect()
-    conn.execute("INSTALL h3; LOAD h3; INSTALL spatial; LOAD spatial")
+    conn.execute("INSTALL h3 FROM community; LOAD h3; INSTALL spatial; LOAD spatial")
 
     # Create a test H3 cell at resolution 3
     test_cell = 0x8327FFFFFFFFFFF  # Example H3 cell ID
@@ -74,7 +74,7 @@ def test_export_h3_to_geojson_single_cell():
 def test_export_h3_with_incidents():
     """Test exporting H3 cells with joined incident data."""
     conn = duckdb.connect()
-    conn.execute("INSTALL h3; LOAD h3; INSTALL spatial; LOAD spatial")
+    conn.execute("INSTALL h3 FROM community; LOAD h3; INSTALL spatial; LOAD spatial")
 
     test_cell = 0x8327FFFFFFFFFFF
 
@@ -140,7 +140,7 @@ def test_export_h3_with_incidents():
 def test_export_coverage_without_incidents():
     """Test that cells with coverage but no incidents get NULL incident fields."""
     conn = duckdb.connect()
-    conn.execute("INSTALL h3; LOAD h3; INSTALL spatial; LOAD spatial")
+    conn.execute("INSTALL h3 FROM community; LOAD h3; INSTALL spatial; LOAD spatial")
 
     # Two cells, only one has incidents
     cell_with_incidents = 0x8327FFFFFFFFFFF

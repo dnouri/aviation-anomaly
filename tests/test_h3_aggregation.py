@@ -125,7 +125,7 @@ class TestH3Aggregation:
 
             # Verify cell count increases with resolution
             conn = duckdb.connect(":memory:")
-            conn.execute("INSTALL h3; LOAD h3")
+            conn.execute("INSTALL h3 FROM community; LOAD h3")
             count_result = conn.execute(f"""
                 SELECT COUNT(DISTINCT h3_cell)
                 FROM read_parquet('{output_file}')
@@ -238,7 +238,7 @@ class TestMultiCellSegmentCounting:
     def test_one_segment_many_cells(self, tmp_path: Path) -> None:
         """Test that one segment crossing many cells counts as 1 in each cell."""
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
         conn.execute("SET memory_limit = '100MB'")
 
         # Create a segment that crosses multiple cells (like a real flight)
@@ -303,7 +303,7 @@ class TestMultiCellSegmentCounting:
     def test_multiple_segments_overlapping_cells(self, tmp_path: Path) -> None:
         """Test correct counting when multiple segments pass through same cells."""
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
         conn.execute("SET memory_limit = '100MB'")
 
         segments_file = tmp_path / "overlapping_segments.parquet"
@@ -395,7 +395,7 @@ class TestIncidentAttribution:
     def test_incident_crossing_multiple_cells(self, tmp_path: Path) -> None:
         """Test dual metrics when one incident spans multiple cells."""
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
         conn.execute("SET memory_limit = '100MB'")
 
         # Create an incident segment crossing 5+ cells
@@ -474,7 +474,7 @@ class TestNullCoordinateHandling:
     def test_segment_with_partial_null_coordinates(self, tmp_path: Path) -> None:
         """Test that NULL coordinate points are filtered but segment remains."""
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
         conn.execute("SET memory_limit = '100MB'")
 
         segments_file = tmp_path / "null_coords_segment.parquet"
@@ -551,7 +551,7 @@ class TestPointsPerFlightCalculation:
     def test_ppf_calculation_per_cell(self, tmp_path: Path) -> None:
         """Test that each cell calculates its own PPF correctly."""
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
         conn.execute("SET memory_limit = '100MB'")
 
         segments_file = tmp_path / "ppf_segments.parquet"
@@ -628,7 +628,7 @@ class TestPointsPerFlightCalculation:
     def test_ppf_categories(self, tmp_path: Path) -> None:
         """Test PPF-based coverage quality categories."""
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
         conn.execute("SET memory_limit = '100MB'")
 
         # Test with compute_coverage_metrics if it exists
@@ -727,7 +727,7 @@ class TestCellHierarchyConsistency:
     def test_resolutions_computed_independently(self, tmp_path: Path) -> None:
         """Test that each resolution is computed from raw data, not hierarchically."""
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
         conn.execute("SET memory_limit = '100MB'")
 
         segments_file = tmp_path / "hierarchy_segments.parquet"
@@ -826,7 +826,7 @@ class TestSinglePointEdgeCases:
     def test_segment_with_less_than_2_points_filtered(self, tmp_path: Path) -> None:
         """Test that segments with <2 points are filtered per SPEC."""
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
         conn.execute("SET memory_limit = '100MB'")
 
         segments_file = tmp_path / "single_point_segment.parquet"
@@ -886,7 +886,7 @@ class TestSinglePointEdgeCases:
     def test_segment_with_points_in_same_cell(self, tmp_path: Path) -> None:
         """Test segment with multiple points all in the same H3 cell."""
         conn = duckdb.connect(":memory:")
-        conn.execute("INSTALL h3; LOAD h3")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
         conn.execute("SET memory_limit = '100MB'")
 
         segments_file = tmp_path / "same_cell_segment.parquet"
