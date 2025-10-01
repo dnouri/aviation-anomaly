@@ -131,7 +131,10 @@ class TestH3DualMetrics:
 
         # Compute dual metrics
         compute_dual_incident_metrics(
-            incidents_file=test_incidents_file, segments_file=test_segments_file, output_file=output_file, resolution=5
+            incidents_files=test_incidents_file,
+            segments_files=test_segments_file,
+            output_file=output_file,
+            resolution=5,
         )
 
         # Use shared connection for verification
@@ -225,8 +228,8 @@ class TestH3DualMetrics:
 
             # Run aggregation (should produce both metrics and mapping)
             compute_dual_incident_metrics(
-                incidents_file=test_incidents_file,
-                segments_file=test_segments_file,
+                incidents_files=test_incidents_file,
+                segments_files=test_segments_file,
                 output_file=metrics_file,
                 resolution=5,
             )
@@ -322,8 +325,8 @@ class TestH3DualMetrics:
             from aviation_anomaly.h3_aggregation import compute_dual_incident_metrics
 
             compute_dual_incident_metrics(
-                incidents_file=incidents_file,
-                segments_file=segments_file,
+                incidents_files=incidents_file,
+                segments_files=segments_file,
                 output_file=output_file,
                 resolution=5,
             )

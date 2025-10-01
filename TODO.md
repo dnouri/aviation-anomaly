@@ -636,7 +636,55 @@ The H3 aggregation tracks `emergency_types_list` array and `predominant_emergenc
 
 ---
 
-## Phase 10: Integration & Documentation ☐
+## Phase 10: Low-Memory Refactoring ✅
+
+**Goal**: Enable H3 aggregation in memory-constrained environments and prevent data corruption from crashes.
+
+**Problem**: Processing multi-day flight data required excessive temp disk and crashed, leaving corrupt 0-byte files that broke subsequent runs.
+
+**Solution**: Two complementary refactors:
+1. **Per-day processing with merge**: Process data per-day with smaller temp requirements, then merge aggregated records
+2. **Atomic writes**: Write to `.tmp` files, rename on success, clean up on failure
+
+**Outcome**:
+- Memory usage: significantly reduced
+- File sizes: significantly smaller (removed unnecessary UUID lists)
+- Crash safety: No corrupt files, automatic recovery
+- Tests: all passing (added atomic write test, updated tests for removed fields)
+
+**Architecture Changes**:
+- CLI expands glob patterns → explicit file lists
+- Per-day files in `daily/` subdirectory (implementation detail)
+- Merged files in root directory (public API)
+- Staleness detection: only reprocess files newer than outputs
+- Atomic write pattern: 11 functions (h3_aggregation.py, segmentation.py, tile_generation.py)
+- No backward compatibility (clean slate)
+
+**Key Files**:
+- `sql/h3_coverage_merge.sql` - Merge per-day coverage (drops lists, sums counts)
+- `sql/h3_incidents_merge.sql` - Merge incidents (deduplicates, aggregates types)
+- `sql/incident_mapping_merge.sql` - Merge mappings (deduplicates pairs)
+- `sql/h3_aggregation.sql` - Removed segment_list/aircraft_list (significantly smaller files)
+- `h3_aggregation.py` - Per-day orchestration + atomic write functions
+- `segmentation.py` - Atomic write for batch combine
+- `tile_generation.py` - Atomic write for GeoJSON export
+- `cli.py` - Date pattern filter (excludes test data)
+
+**References**: SPEC §4.3 (Aggregation), Phase 10 architecture discussion
+
+**Validation**:
+- ✅ Multi-day processing successful
+- ✅ Incidents detected across H3 cells at multiple resolutions
+- ✅ Large segment and observation datasets processed
+- ✅ Memory usage within constrained limits throughout pipeline
+- ✅ No temp file corruption on forced interruption
+- ✅ Incremental updates work (single day reprocessing)
+
+**Commit Message**: `refactor: low-memory per-day H3 processing with atomic writes for crash safety`
+
+---
+
+## Phase 11: Integration & Documentation ☐
 
 **Goal**: End-to-end validation and learnings documentation.
 

@@ -525,27 +525,37 @@ def aggregate(
     # Parse resolutions
     resolution_list = [int(r.strip()) for r in resolutions.split(",")]
 
-    # Auto-detect segment file if not provided
+    # Auto-detect or validate segment files - always work with explicit file lists
     if segment_file is None:
+        # Auto-detect all segment files matching date pattern (YYYY-MM-DD)
+        # This excludes test/sample files like segments_sample.parquet
+        import re
+
+        DATE_PATTERN = re.compile(r"segments_\d{4}-\d{2}-\d{2}\.parquet$")
+
         segment_dir = Path("data/segments")
         if segment_dir.exists():
-            segment_files = sorted(segment_dir.glob("segments_*.parquet"))
-            if segment_files:
-                segment_file = segment_files[-1]  # Use most recent
-                click.echo(f"Using segment file: {segment_file}")
-            else:
-                click.echo("Error: No segment files found in data/segments/", err=True)
+            all_files = sorted(segment_dir.glob("segments_*.parquet"))
+            segment_files = [f for f in all_files if DATE_PATTERN.match(f.name)]
+            if not segment_files:
+                click.echo("Error: No dated segment files found in data/segments/", err=True)
                 ctx.exit(1)
         else:
             click.echo("Error: No segment file provided and data/segments/ doesn't exist", err=True)
             ctx.exit(1)
-
-    if not segment_file.exists():
-        click.echo(f"Error: Segment file not found: {segment_file}", err=True)
-        ctx.exit(1)
+    else:
+        # Single file provided - wrap in list for uniform processing
+        if not segment_file.exists():
+            click.echo(f"Error: Segment file not found: {segment_file}", err=True)
+            ctx.exit(1)
+        segment_files = [segment_file]
 
     click.echo(f"Computing H3 aggregation for resolutions: {resolution_list}")
-    click.echo(f"Input: {segment_file}")
+    click.echo(f"Processing {len(segment_files)} segment file(s)")
+    for sf in segment_files[:3]:  # Show first 3 files
+        click.echo(f"  - {sf.name}")
+    if len(segment_files) > 3:
+        click.echo(f"  ... and {len(segment_files) - 3} more")
     click.echo(f"Output directory: {output_dir}")
     if force:
         click.echo("Force mode: Will regenerate existing files")
@@ -572,7 +582,7 @@ def aggregate(
             from aviation_anomaly.h3_aggregation import compute_h3_coverage_multi_resolution
 
             results = compute_h3_coverage_multi_resolution(
-                segment_file=segment_file,
+                segment_files=segment_files,
                 output_dir=output_dir,
                 resolutions=resolutions_to_process,
                 config=config,
@@ -590,21 +600,32 @@ def aggregate(
     else:
         click.echo("\nAll H3 coverage files already exist, skipping coverage aggregation")
 
-    # Determine incidents file to process (moved outside the else block)
+    # Determine incidents files to process - match each segment file
     if incidents_file is None:
-        # Auto-detect based on segment filename
-        segment_date = segment_file.stem.replace("segments_", "")
-        incidents_dir = segment_file.parent.parent / "incidents"
-        incidents_file = incidents_dir / f"incidents_{segment_date}.parquet"
+        # Auto-detect incident files matching segment files
+        incidents_dir = Path("data/incidents")
+        incident_files = []
 
-        # Only process if auto-detected file exists
-        process_incidents = incidents_file.exists()
+        for seg_file in segment_files:
+            # Extract date from segment filename (e.g., segments_2025-07-02.parquet → 2025-07-02)
+            segment_date = seg_file.stem.replace("segments_", "")
+            inc_file = incidents_dir / f"incidents_{segment_date}.parquet"
+            if inc_file.exists():
+                incident_files.append(inc_file)
+
+        process_incidents = len(incident_files) > 0
+        if process_incidents:
+            click.echo(f"\nFound {len(incident_files)} incident file(s) matching segments")
     else:
-        # Explicit file provided - always process
+        # Single incidents file provided - wrap in list
+        if not incidents_file.exists():
+            click.echo(f"Error: Incidents file not found: {incidents_file}", err=True)
+            ctx.exit(1)
+        incident_files = [incidents_file]
         process_incidents = True
 
     if process_incidents:
-        click.echo(f"\nProcessing incidents from: {incidents_file}")
+        click.echo(f"\nProcessing incidents for {len(incident_files)} day(s)")
         from aviation_anomaly.h3_aggregation import compute_dual_incident_metrics
 
         # Process incidents for each resolution
@@ -622,11 +643,9 @@ def aggregate(
 
             try:
                 click.echo(f"  Processing resolution {res}...")
-                # incidents_file is guaranteed to exist here due to process_incidents check
-                assert incidents_file is not None  # Type hint for mypy
                 compute_dual_incident_metrics(
-                    incidents_file=incidents_file,
-                    segments_file=segment_file,
+                    incidents_files=incident_files,
+                    segments_files=segment_files,
                     output_file=incident_output,
                     resolution=res,
                     config=config,

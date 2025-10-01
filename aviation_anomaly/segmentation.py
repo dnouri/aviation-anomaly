@@ -156,20 +156,29 @@ def segment_day(date: datetime.date, output_dir: Path, config: Config) -> Path:
         # Additional optimization for large combines
         combine_conn.execute("SET preserve_insertion_order = false")
 
+        # Atomic write pattern for combining batches
+        temp_final_path = final_path.with_suffix(".tmp")
+
         # Combine pre-sorted batches into final output
         # Note: Output is block-sorted - each batch's data remains internally sorted
         # by (icao24, start_time), but batches themselves are not globally ordered.
         # This structure is sufficient for downstream operations that process segments
         # independently or by geographic location (H3 cells).
         logger.info(f"Combining {len(batch_files)} pre-sorted batch files using UNION ALL BY NAME...")
-        combine_conn.execute(f"""
-            COPY (
-                {union_query}
-            ) TO '{final_path}' (FORMAT PARQUET, COMPRESSION 'zstd')
-        """)
-        logger.info("Batch combination completed successfully")
-
-        combine_conn.close()
+        try:
+            combine_conn.execute(f"""
+                COPY (
+                    {union_query}
+                ) TO '{temp_final_path}' (FORMAT PARQUET, COMPRESSION 'zstd')
+            """)
+            temp_final_path.rename(final_path)
+            logger.info("Batch combination completed successfully")
+        except Exception:
+            if temp_final_path.exists():
+                temp_final_path.unlink()
+            raise
+        finally:
+            combine_conn.close()
 
         # Clean up batch files
         for batch_file in batch_files:
