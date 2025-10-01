@@ -81,9 +81,11 @@ min_distance_km = 30.0      # AND distance < 30km
 
 [incidents]
 debounce_minutes = 15       # Merge same-type incidents < 15min apart
-quality_gates.min_samples = 5           # Temporal stability
-quality_gates.min_duration_s = 45       # Signal persistence
-quality_gates.max_ground_ratio = 0.3    # Airborne validation
+default_profile = "production"  # Filter profile for squawk validation
+
+# Filter profiles address data quality issues identified in OpenSky Report 2020
+# where false positive rates for emergency squawks can be 1000x+ higher than actual
+# Production profile (default) reduces 7500 hijack false positives by ~75%
 
 [aggregation]
 min_flights_threshold = 50  # Mask cells with insufficient data
@@ -102,21 +104,44 @@ aviation-anomaly extract --date-range 2025-07-01 2025-07-07
 aviation-anomaly extract --date 2025-07-01 --output-dir data/raw --no-resume
 ```
 
-### Planned Commands (Phase 3-8)
+### Processing Pipeline
 
 ```bash
-# Process flight segments (Phase 3)
-aviation-anomaly segment
+# Process flight segments with gap detection
+aviation-anomaly segment --date 2025-07-01
 
-# Detect incidents (Phase 4)
-aviation-anomaly detect
+# Detect emergency incidents with quality filtering
+aviation-anomaly detect --date 2025-07-01  # Uses production filter by default
 
-# Aggregate to H3 (Phase 5)
-aviation-anomaly aggregate
+# List available filter profiles
+aviation-anomaly detect --list-profiles
+# Available: production (default), research, high_security
 
-# Generate tiles (Phase 6)
-aviation-anomaly tiles
+# Use specific filter profile
+aviation-anomaly detect --date 2025-07-01 --filter-profile research
+aviation-anomaly detect --date 2025-07-01 --filter-profile none  # No filtering
+
+# Aggregate to H3 hexagonal grid
+aviation-anomaly aggregate --segment-file data/segments/segments_2025-07-01.parquet
+
+# Generate PMTiles for visualization
+aviation-anomaly tiles --pmtiles
+
+# Start API server
+aviation-anomaly serve --port 8000
 ```
+
+#### Filter Profiles
+
+The system includes three filter profiles to handle data quality issues:
+
+| Profile | Purpose | 7500 Reduction | 7600 Reduction | 7700 Reduction |
+|---------|---------|----------------|----------------|----------------|
+| **production** (default) | Balanced for operational use | -75% | -75% | -78% |
+| **research** | Minimal filtering for analysis | -29% | -35% | -34% |
+| **high_security** | Strict validation only | -98% | -100% | -100% |
+
+Based on analysis of July 2, 2025 data showing 51 hijack squawks (1,545x expected rate per OpenSky Report 2020).
 
 ### Python API
 

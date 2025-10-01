@@ -38,6 +38,7 @@ This document defines the end‑to‑end system that ingests OpenSky state vecto
   - Airborne validation (≤30% ground samples)
   - Roller-dial suppression (77XX→7700 patterns)
   - Confidence score: 0-100 composite
+  - **Squawk-specific filtering** (v1.2): Three profiles based on OpenSky Report 2020 findings
 - **Incident debounce**: 15 minutes (type-specific within segment)
 - **Storage**: Hybrid GeoParquet with geometry + coordinate arrays
 - **Development progression**: 1-hour sample → 1-day validation → 7-day production
@@ -196,12 +197,40 @@ Process only records with observable squawk codes (~65% of data):
 - Incident starts when validated squawk enters {7500, 7600, 7700}
 - **Debounce**: Same-type events <15 minutes apart are merged
 - Minimum 30% squawk coverage for segment to be incident-eligible
+- **Squawk-specific filtering** (v1.2): Apply configurable filter profiles
 
 Record fields:
   - Core: `incident_id`, `segment_id`, `squawk_type`, `start_time`, `end_time`
   - Quality: `confidence_score`, `samples_count`, `squawk_coverage_ratio`
   - Validation: `passes_quality_gates`, `confidence_category`
   - Enrichment: `callsign`, `registration`, `typecode` (nullable)
+
+**4.2.3.1 Squawk Filtering Profiles (v1.2)**
+
+Based on findings from the **OpenSky Report 2020**, which analyzed 2 years of global data and found:
+- Only **832 validated 7700 emergencies** (with >1000 samples filter)
+- **4 cases of 7500 in 4 months** (NONE were real hijacks)
+- **70 cases of 7600 in 4 months**
+
+Our July 2, 2025 data showed **51 hijack squawks in one day** (1,545x expected rate), indicating severe data quality issues from receiver network malfunctions and transponder calibration errors.
+
+**Filter Profiles Implementation:**
+
+Three SQL-parameterized profiles combining strategies:
+1. **Statistical Outlier Filtering**: Type-specific sample count thresholds (P75/P90)
+2. **Temporal Coherence**: Minimum duration requirements (60-180s)
+3. **Ensemble Validation**: Combined confidence and sample requirements
+
+**July 2, 2025 Filtering Results:**
+
+| Profile | 7500 Hijack | 7600 Radio | 7700 General | Total | Reduction | Use Case |
+|---------|------------|-------------|--------------|-------|-----------|----------|
+| None (raw) | 51 | 48 | 50 | 149 | 0% | Baseline |
+| Research | 36 | 31 | 33 | 100 | -33% | Anomaly research |
+| **Production** | **13** | **12** | **11** | **36** | **-76%** | **Default - operational systems** |
+| High Security | 1 | 0 | 0 | 1 | -99% | High-confidence validation |
+
+The production profile (default) reduces false positive 7500 hijack codes by 75% while preserving legitimate incidents, bringing rates closer to expected levels from historical data.
 
 **4.2.4 Segment→H3 Coverage**
 - Compute H3 cells touched by segment polyline for resolutions r3–r7
