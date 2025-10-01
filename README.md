@@ -131,6 +131,25 @@ aviation-anomaly tiles --pmtiles
 aviation-anomaly serve --port 8000
 ```
 
+### Pipeline Orchestration
+
+For batch processing multiple days with automatic logging and memory monitoring:
+
+```bash
+# Run the full pipeline (segments → incidents → H3 → tiles)
+./scripts/process.sh
+
+# Logs are automatically saved to logs/process_TIMESTAMP.log
+# Monitor progress: tail -f logs/process_*.log
+```
+
+The pipeline script:
+- Processes days sequentially to minimize memory usage
+- Skips already-completed days (incremental processing)
+- Provides memory status and OOM detection
+- Logs all output with timestamps
+- Runs all pipeline stages: segmentation, incident detection, H3 aggregation, and tile generation
+
 #### Filter Profiles
 
 The system includes three filter profiles to handle data quality issues:
