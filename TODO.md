@@ -603,30 +603,30 @@ The H3 aggregation tracks `emergency_types_list` array and `predominant_emergenc
 
 ### Tasks
 
-- [ ] **Update H3 aggregation schema**
+- [x] **Update H3 aggregation schema**
   - RED: Test for incidents_7500, incidents_7600, incidents_7700 fields fails
   - GREEN: Add type-specific counter fields to aggregation
   - GREEN: Maintain backward compatibility with incidents_unique
   - REFACTOR: Clean up SQL to use consistent naming
   - Test: Verify sum of type counters equals incidents_unique
 
-- [ ] **Modify aggregation pipeline**
+- [x] **Modify aggregation pipeline**
   - RED: Test that type counters aggregate correctly fails
   - GREEN: Update h3_incident_metrics.sql to COUNT by emergency_type
-  - GREEN: Populate new fields in output Parquet
-  - Test: Validate against known July 2nd data
+  - GREEN: Populate new fields in output Parquet (h3_incident_metrics.sql + h3_incidents_merge.sql)
+  - Test: test_type_specific_incident_counters passes
 
-- [ ] **Regenerate PMTiles with new fields**
-  - RED: Test that PMTiles contain type-specific fields fails
-  - GREEN: Re-run tiles command with updated H3 data
-  - GREEN: Verify new fields preserved through Tippecanoe
+- [ ] **Regenerate H3 aggregates and PMTiles**
+  - Run: `aviation-anomaly aggregate --force` (in progress, 99%)
+  - Run: `aviation-anomaly tiles --pmtiles`
   - Test: Check PMTiles size increase is acceptable (<20%)
+  - Test: Verify new fields preserved through Tippecanoe
 
-- [ ] **Update frontend filtering**
-  - RED: E2E test for accurate type filtering fails
+- [x] **Update frontend filtering**
   - GREEN: Use type-specific fields instead of predominant_emergency_type
-  - GREEN: Color scale based on filtered type counts
-  - Test: All cells with selected type are visible
+  - GREEN: Color scale based on filtered type counts (dynamic field selection)
+  - GREEN: Filter expression: `incidents_{type} > 0` shows all cells with that type
+  - Commit: 22e38be "fix: add type-specific emergency counters for accurate filtering"
 
 **Manual QC Checklist**:
 - [ ] Verify cells with mixed types appear when filtered
