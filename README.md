@@ -1,77 +1,160 @@
 # Aviation Anomaly Tracker
 
-> ⚠️ **Development Status**: Active development - Phase 2 of 9 complete
+A research tool for exploring global emergency squawk patterns in historical aviation data.
 
-Analyze emergency patterns in aviation data using OpenSky Network's historical ADS-B data.
+## What & Why
 
-This system detects and visualizes emergency squawk patterns (7700/7600/7500) on a global H3 hexagonal grid, providing insights into aviation incidents while acknowledging data coverage limitations.
+The [OpenSky Report 2020](https://www.cs.ox.ac.uk/files/12039/OpenSky%20Report%202020.pdf) was the first systematic analysis of aircraft emergencies from ADS-B data, revealing that raw emergency squawk codes (7700/7600/7500) contain false positive rates exceeding 1000x actual emergency rates. These false positives come from brief code transitions during dial-up, ground vehicle testing, short transmission bursts, and regional ATC practice variations.
 
-## Features
+This tool makes that analysis reproducible and interactive. It processes OpenSky Network's historical ADS-B data, applies temporal, persistence, and airborne quality gates to filter spurious signals, and produces an explorable map showing where emergency patterns appear globally.
 
-- ✅ Query OpenSky Network's Trino database for historical ADS-B data
-- ✅ Extract and cache daily flight data in Parquet format
-- 🚧 Segment flight paths with gap detection and interpolation
-- 🚧 Detect emergency incidents with temporal quality validation
-- 🚧 Aggregate to H3 hexagonal grids with coverage metrics
-- 📋 Generate PMTiles for web visualization (planned)
-- 📋 Interactive map with drill-down capabilities (planned)
+**Designed for:**
+- Aviation safety researchers exploring historical patterns
+- Data analysts investigating regional variations
+- Incident investigators examining specific events
+
+**Not designed for:**
+- Real-time flight monitoring or operational alerting
+- Safety scoring or risk assessment
+- Flight tracking or surveillance
+
+See [SPEC.md](SPEC.md) §1.1-1.2 for detailed user stories and non-goals.
 
 ## Quick Start
 
 ### Prerequisites
+
 - Python 3.11+
-- [uv](https://github.com/astral-sh/uv) package manager (recommended)
-- OpenSky Network account with data access
+- [uv](https://github.com/astral-sh/uv) package manager
+- OpenSky Network account with [data access](https://opensky-network.org/data/apply)
+- 30GB+ RAM recommended for processing multi-day datasets
 
 ### Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/aviation-anomaly.git
+git clone https://github.com/dnouri/aviation-anomaly.git
 cd aviation-anomaly
-
-# Install with uv (recommended)
 uv pip install -e .
-
-# Or with pip
-pip install -e .
 ```
 
-## Authentication
+### Authentication
 
-This tool requires OpenSky Network credentials to access their Trino database.
-
-### Getting Credentials
-
-1. Sign up at https://opensky-network.org/
-2. Request data access at https://opensky-network.org/data/apply
-
-### Setting Up Authentication
-
-The tool supports two authentication methods:
-
-#### 1. Environment Variables (Recommended for CI/CD)
+OpenSky Network credentials are required for data extraction:
 
 ```bash
 export OPENSKY_USERNAME="your.email@example.com"
 export OPENSKY_PASSWORD="your-password"
 ```
 
-#### 2. Interactive Prompt
+Tokens are cached for 2 hours in `.opensky_tokens.json`. For non-interactive environments (CI/CD), environment variables are required.
 
-If environment variables are not set, the tool will prompt for credentials when needed.
-Tokens are cached for 2 hours in `.opensky_tokens.json` in your current directory.
+### Basic Workflow
 
-### How Authentication Works
+1. **Extract historical data** (requires credentials, can take hours):
+   ```bash
+   aviation-anomaly extract --date 2025-07-01
+   ```
 
-- **First run**: Prompts for username/password (or uses env vars)
-- **Subsequent runs**: Uses cached token (valid for 2 hours)
-- **Token refresh**: Automatically refreshes expired tokens (up to 10 hours)
-- **CI mode**: Requires environment variables, never prompts
+2. **Process the data** (automated pipeline):
+   ```bash
+   ./scripts/process.sh
+   ```
+   This runs segmentation → incident detection → H3 aggregation → tile generation. Progress is logged automatically to `logs/process_TIMESTAMP.log`.
+
+3. **Explore the results**:
+   ```bash
+   aviation-anomaly serve --port 8000
+   ```
+   Open http://localhost:8000 to view the interactive map.
+
+## Understanding the Tool
+
+### What It Does
+
+The tool implements a multi-stage pipeline (see [SPEC.md](SPEC.md) §4 for technical details):
+
+1. **Extraction** — Queries OpenSky's Trino database for historical ADS-B state vectors, caching to local Parquet files
+2. **Segmentation** — Detects flight segments using gap-based splitting (20-minute gaps) with distance/duration filtering
+3. **Detection** — Identifies emergency incidents using quality gates: 5+ samples over 60s, >45s persistence, airborne validation, roller-dial suppression
+4. **Aggregation** — Computes H3 hexagonal cell statistics at multiple resolutions (r3-r7) with dual metrics for rates and visualization
+5. **Tiles** — Generates PMTiles for web rendering via Tippecanoe
+
+### What It Produces
+
+- **Interactive map** showing emergency rate heatmaps with drill-down capabilities ([SPEC.md](SPEC.md) §5)
+- **Parquet data files** at each pipeline stage (segments, incidents, H3 aggregates)
+- **PMTiles** for efficient web visualization
+- **Drill-down API** for incident-level details ([SPEC.md](SPEC.md) §6)
+
+### Data Characteristics
+
+ADS-B data has inherent characteristics that affect analysis:
+
+- ~35% of records have no squawk code (normal for ADS-B networks)
+- No receiver diversity information in this dataset
+- Coverage varies by geographic region and time
+- Velocity and altitude data not included in this dataset
+
+These are characteristics of ADS-B networks, not data quality issues. The tool applies mitigation strategies: temporal validation strengthened to 5+ samples, conservative interpolation at 5km/30s, and coverage quality tracking. See [SPEC.md](SPEC.md) §1.4 for detailed characteristics and mitigations.
+
+**Important:** All rates reflect *observed* traffic under OpenSky coverage, not true global rates.
+
+## Using the Pipeline
+
+### Data Extraction
+
+Extraction requires OpenSky credentials and can take hours for multi-day datasets:
+
+```bash
+# Extract single day
+aviation-anomaly extract --date 2025-07-01
+
+# Extract date range (runs sequentially)
+aviation-anomaly extract --date-range 2025-07-01 2025-07-07
+```
+
+Data is cached in `data/raw/` as daily Parquet files. Extraction supports resume (skips existing files) and automatic retry with exponential backoff for rate limiting. See [SPEC.md](SPEC.md) §4.1 for technical details.
+
+### Automated Processing
+
+Once raw data exists, use `scripts/process.sh` to run the full pipeline:
+
+```bash
+./scripts/process.sh
+```
+
+The script:
+- Processes days sequentially to minimize memory usage (suitable for 30GB RAM systems)
+- Skips already-completed days (incremental processing)
+- Monitors memory status and detects OOM errors
+- Logs all output with timestamps to `logs/process_TIMESTAMP.log`
+
+**Note:** The script does NOT run extraction. Run `aviation-anomaly extract` first to populate `data/raw/`.
+
+### Manual Processing
+
+For fine-grained control, run pipeline stages individually:
+
+```bash
+# Segment flight paths
+aviation-anomaly segment --date 2025-07-01
+
+# Detect incidents (uses production filter by default)
+aviation-anomaly detect --date 2025-07-01
+
+# Aggregate to H3 grid (auto-discovers all segment files)
+aviation-anomaly aggregate
+
+# Generate tiles
+aviation-anomaly tiles --pmtiles
+
+# Start web interface
+aviation-anomaly serve --port 8000
+```
 
 ## Configuration
 
-Configuration uses TOML format in `config.toml`:
+Configuration is managed via `config.toml`. Key settings:
 
 ```toml
 [segments]
@@ -81,95 +164,105 @@ min_distance_km = 30.0      # AND distance < 30km
 
 [incidents]
 debounce_minutes = 15       # Merge same-type incidents < 15min apart
-default_profile = "production"  # Filter profile for squawk validation
+default_profile = "production"  # Filter profile
 
-# Filter profiles address data quality issues identified in OpenSky Report 2020
-# where false positive rates for emergency squawks can be 1000x+ higher than actual
-# Production profile (default) reduces 7500 hijack false positives by ~75%
-
-[aggregation]
-min_flights_threshold = 50  # Mask cells with insufficient data
+[duckdb]
+memory_limit = "8GB"        # Adjust based on available RAM
+threads = 2                 # Parallel processing threads
 ```
 
-## Usage
+### Filter Profiles
 
-### Current Capabilities
+The system provides three filter profiles based on OpenSky Report 2020 findings ([SPEC.md](SPEC.md) §1.3):
+
+| Profile | Purpose | False Positive Reduction |
+|---------|---------|--------------------------|
+| **production** (default) | Balanced for analysis | ~75% |
+| **research** | Minimal filtering | ~30% |
+| **high_security** | Strict validation | ~98% |
+
+**Why filtering matters:** Analysis of real-world data shows hijack squawk (7500) rates 1,545x higher than expected. Production profile reduces false positives by ~75% while preserving legitimate incidents.
+
+**Using profiles:**
 
 ```bash
-# Extract daily data (implemented)
+# Default production profile
+aviation-anomaly detect --date 2025-07-01
+
+# List available profiles
+aviation-anomaly detect --list-profiles
+
+# Use specific profile
+aviation-anomaly detect --date 2025-07-01 --filter-profile research
+```
+
+Quality gates applied ([SPEC.md](SPEC.md) §1.3):
+- **Temporal:** 5+ samples within 60 seconds
+- **Persistence:** Emergency duration >45 seconds
+- **Airborne:** <30% of samples on ground
+- **Confidence:** Configurable minimum score (50-80 depending on profile)
+
+## Command Reference
+
+### Extraction
+
+```bash
 aviation-anomaly extract --date 2025-07-01
 aviation-anomaly extract --date-range 2025-07-01 2025-07-07
-
-# With options
 aviation-anomaly extract --date 2025-07-01 --output-dir data/raw --no-resume
 ```
 
-### Processing Pipeline
+### Segmentation
 
 ```bash
-# Process flight segments with gap detection
 aviation-anomaly segment --date 2025-07-01
-
-# Detect emergency incidents with quality filtering
-aviation-anomaly detect --date 2025-07-01  # Uses production filter by default
-
-# List available filter profiles
-aviation-anomaly detect --list-profiles
-# Available: production (default), research, high_security
-
-# Use specific filter profile
-aviation-anomaly detect --date 2025-07-01 --filter-profile research
-aviation-anomaly detect --date 2025-07-01 --filter-profile none  # No filtering
-
-# Aggregate to H3 hexagonal grid
-aviation-anomaly aggregate --segment-file data/segments/segments_2025-07-01.parquet
-
-# Generate PMTiles for visualization
-aviation-anomaly tiles --pmtiles
-
-# Start API server
-aviation-anomaly serve --port 8000
+aviation-anomaly segment --date 2025-07-01 --output-dir data/segments
 ```
 
-### Pipeline Orchestration
-
-For batch processing multiple days with automatic logging and memory monitoring:
+### Detection
 
 ```bash
-# Run the full pipeline (segments → incidents → H3 → tiles)
-./scripts/process.sh
-
-# Logs are automatically saved to logs/process_TIMESTAMP.log
-# Monitor progress: tail -f logs/process_*.log
+aviation-anomaly detect --date 2025-07-01
+aviation-anomaly detect --date 2025-07-01 --filter-profile research
+aviation-anomaly detect --date 2025-07-01 --stats
 ```
 
-The pipeline script:
-- Processes days sequentially to minimize memory usage
-- Skips already-completed days (incremental processing)
-- Provides memory status and OOM detection
-- Logs all output with timestamps
-- Runs all pipeline stages: segmentation, incident detection, H3 aggregation, and tile generation
+### Aggregation
 
-#### Filter Profiles
+```bash
+aviation-anomaly aggregate
+aviation-anomaly aggregate --force
+aviation-anomaly aggregate --resolutions 3,4,5,6,7
+```
 
-The system includes three filter profiles to handle data quality issues:
+### Tiles
 
-| Profile | Purpose | 7500 Reduction | 7600 Reduction | 7700 Reduction |
-|---------|---------|----------------|----------------|----------------|
-| **production** (default) | Balanced for operational use | -75% | -75% | -78% |
-| **research** | Minimal filtering for analysis | -29% | -35% | -34% |
-| **high_security** | Strict validation only | -98% | -100% | -100% |
+```bash
+aviation-anomaly tiles --pmtiles
+aviation-anomaly tiles --h3-dir data/h3 --output-dir data/tiles
+```
 
-Based on analysis of July 2, 2025 data showing 51 hijack squawks (1,545x expected rate per OpenSky Report 2020).
+### Server
 
-### Python API
+```bash
+aviation-anomaly serve --port 8000
+
+# Access points:
+# - Web UI: http://localhost:8000
+# - API docs: http://localhost:8000/docs
+# - Health check: http://localhost:8000/health
+```
+
+Run any command with `--help` for detailed options.
+
+## Python API
 
 ```python
 from aviation_anomaly.data_access import TrinoQueryEngine
 from aviation_anomaly.extraction import extract_day
 from datetime import date
 
-# Extract a day of data (uses auth automatically)
+# Extract a day of data (uses cached auth)
 parquet_file = extract_day(date(2025, 7, 1))
 
 # Query OpenSky directly
@@ -177,11 +270,13 @@ engine = TrinoQueryEngine()
 result = engine.execute("""
     SELECT COUNT(*) as count
     FROM minio.osky.state_vectors_data4
-    WHERE hour = 1751328000  -- July 1, 2025, hour 00
+    WHERE hour = 1751328000
 """)
 ```
 
-## Testing
+## Development
+
+### Testing
 
 ```bash
 # Run all tests
@@ -196,46 +291,41 @@ export OPENSKY_PASSWORD="your-password"
 uv run pytest -m integration
 ```
 
-## Data Characteristics
+The test suite uses real production SQL via fixtures, not reimplementations. See [SPEC.md](SPEC.md) §4.5 for SQL testing methodology.
 
-**Important**: This project works with ADS-B data which has inherent characteristics:
-- ~35% of records have no squawk code (normal for ADS-B networks)
-- No receiver diversity information in this dataset
-- Coverage varies by geographic region and time
-- See [SPEC.md](SPEC.md#14-ads-b-data-characteristics) for detailed data characteristics and mitigations
-
-**Current Dataset**: 7 days of data (July 1-7, 2025) comprising:
-- 5.1 billion position records
-- 109K unique aircraft
-- ~730M records per day
-
-## Architecture
+### Architecture
 
 ```
 aviation_anomaly/
-├── auth.py          # Token management and credential handling
-├── data_access.py   # Trino query engine
-├── extraction.py    # Data extraction and caching
-├── config.py        # Configuration management
-├── cli.py           # Command-line interface
-└── sql/             # SQL queries for data processing
+├── auth.py              # Token management (JWT from password flow)
+├── data_access.py       # Trino query engine
+├── extraction.py        # OpenSky data extraction
+├── segmentation.py      # Gap-based flight segmentation
+├── incident_detection.py # Quality-gated emergency detection
+├── h3_aggregation.py    # Multi-resolution H3 statistics
+├── tile_generation.py   # PMTiles via Tippecanoe
+├── api.py               # FastAPI drill-down endpoints
+├── config.py            # TOML configuration management
+├── cli.py               # Click command-line interface
+├── sql/                 # DuckDB SQL pipelines
+└── frontend/            # MapLibre GL + vanilla JS
 ```
+
+Memory-safe design: Pure SQL pipelines via DuckDB, no Pandas DataFrames, atomic writes with crash safety, per-day processing with merge for constrained environments. See [SPEC.md](SPEC.md) §4 for detailed pipeline architecture.
 
 ## Documentation
 
-- [SPEC.md](SPEC.md) - Detailed technical specification
-- [TODO.md](TODO.md) - Implementation roadmap and progress
+- **[SPEC.md](SPEC.md)** — Complete technical specification
+  - §1: Overview, user stories, non-goals, data characteristics
+  - §2-3: Functional requirements and data schemas
+  - §4: ETL pipeline stages with implementation details
+  - §5: Frontend visualization and UX requirements
+  - §6: API specifications
+  - §7-8: Testing strategy and operational considerations
+- **[TODO.md](TODO.md)** — Implementation roadmap and phase tracking
 
 ## References
 
-- The [OpenSky Report 2020](https://www.cs.ox.ac.uk/files/12039/OpenSky%20Report%202020.pdf) analyzed global aircraft emergencies from ADS-B data. It found that raw squawk codes (7700/7600/7500) include many false positives (short bursts, code transitions, ground vehicles) and that regional ATC practices and receiver coverage strongly shape observed hotspots. The study applied strict filters and masking to isolate real cases.
+The [OpenSky Report 2020](https://www.cs.ox.ac.uk/files/12039/OpenSky%20Report%202020.pdf) analyzed global aircraft emergencies from ADS-B data, finding that raw squawk codes (7700/7600/7500) include many false positives from short bursts, code transitions, and ground vehicles. Regional ATC practices and receiver coverage strongly shape observed hotspots. The study applied strict filters and masking to isolate real cases.
 
-  Implication for our project: we must add robust quality gates, harmonize visibility thresholds, and clearly communicate that maps reflect both technical artefacts and procedural differences, not just true emergencies.
-
-## License
-
-MIT
-
-## Contributing
-
-Contributions are welcome! Please read our contributing guidelines before submitting PRs.
+**Implication:** Emergency squawk analysis requires robust quality gates to separate signal from noise. Maps reflect both technical artifacts and procedural differences, not just true emergencies. This tool implements those quality gates and clearly communicates coverage limitations.
