@@ -21,6 +21,10 @@ COPY (
             SUM(incidents_coverage) as incidents_coverage,
             SUM(unique_segments) as unique_segments,
             SUM(total_segments) as total_segments,
+            -- Type-specific counters
+            SUM(incidents_7500) as incidents_7500,
+            SUM(incidents_7600) as incidents_7600,
+            SUM(incidents_7700) as incidents_7700,
             -- Collect all emergency type lists for post-processing
             LIST(emergency_types_list) as all_type_lists
         FROM read_parquet('{{ daily_pattern }}')
@@ -60,6 +64,10 @@ COPY (
         emergency_types_list,
         emergency_type_diversity,
         predominant_emergency_type,
+        -- Type-specific counters
+        incidents_7500,
+        incidents_7600,
+        incidents_7700,
         -- Recalculate incident rate from summed values
         CASE
             WHEN unique_segments > 0

@@ -47,7 +47,11 @@ COPY (
             -- Emergency type aggregation
             LIST_SORT(LIST_DISTINCT(LIST(emergency_type))) as emergency_types_list,
             COUNT(DISTINCT emergency_type) as emergency_type_diversity,
-            MODE(emergency_type) as predominant_emergency_type
+            MODE(emergency_type) as predominant_emergency_type,
+            -- Type-specific counters enable filtering to cells containing each type
+            COUNT(DISTINCT CASE WHEN emergency_type = '7500' THEN incident_id END) as incidents_7500,
+            COUNT(DISTINCT CASE WHEN emergency_type = '7600' THEN incident_id END) as incidents_7600,
+            COUNT(DISTINCT CASE WHEN emergency_type = '7700' THEN incident_id END) as incidents_7700
         FROM incident_cells
         GROUP BY h3_cell
     ),
@@ -89,6 +93,10 @@ COPY (
             iu.emergency_types_list,
             COALESCE(iu.emergency_type_diversity, 0) as emergency_type_diversity,
             iu.predominant_emergency_type,
+            -- Type-specific counters
+            COALESCE(iu.incidents_7500, 0) as incidents_7500,
+            COALESCE(iu.incidents_7600, 0) as incidents_7600,
+            COALESCE(iu.incidents_7700, 0) as incidents_7700,
             -- Calculate rates
             CASE
                 WHEN COALESCE(f.unique_segments, 0) > 0

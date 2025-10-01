@@ -39,7 +39,9 @@
 7. **API** ✅ — Drill-down endpoint → *Details accessible*
 8. **Frontend** ✅ — Interactive map → *Full visualization*
 9. **Filtering Fix** ☐ — Type-specific counters → *Accurate emergency filtering*
-10. **Integration** ☐ — End-to-end validation → *Production ready*
+10. **Low-Memory Refactoring** ✅ — Per-day processing with atomic writes → *Crash-safe aggregation*
+11. **External Links** ☐ — Position data + ADS-B Exchange → *Flight replay drill-down*
+12. **Integration** ☐ — End-to-end validation → *Production ready*
 
 ## Checkbox Discipline
 
@@ -684,7 +686,93 @@ The H3 aggregation tracks `emergency_types_list` array and `predominant_emergenc
 
 ---
 
-## Phase 11: Integration & Documentation ☐
+## Phase 11: Drill-Down Enhancement with External Links ☐
+
+**Goal**: Enable complete drill-down from H3 cells to individual incidents with external flight tracking.
+
+**Outcome**: Clicking a cell displays incident list with "View Flight Replay" links to ADS-B Exchange, positioned at exact emergency timestamp/location.
+
+**References**: SPEC §5.2.4 (Drill-down Details), §6.2 (Drill-down API)
+
+### Current Limitation (As-Is)
+
+The drill-down API exists (Phase 7) and frontend has basic cell click handler (Phase 8), but:
+- Frontend shows only 5-line summary, not individual incident list
+- API doesn't return position data needed for precise external links
+- No links to external flight trackers
+- Users cannot view actual flight replay or context
+
+### Why This Matters
+
+External links to ADS-B Exchange enable users to:
+- See exact aircraft position at emergency time
+- Replay the flight with interactive timeline
+- View speed, altitude, and full flight path
+- Validate incidents against independent data source
+- Understand geographical and operational context
+
+ADS-B Exchange is free, works with ICAO24 only (no callsign needed), supports historical replay with timestamp positioning, and accepts lat/lon for map centering.
+
+### Tasks
+
+- [ ] **Add position data to drill-down API**
+  - RED: Test that API returns start_lat/start_lon fails
+  - GREEN: Update h3_cell_incidents.sql to JOIN with segments table
+  - GREEN: Extract position from first point: `s.points[1].lat as start_lat`
+  - GREEN: Add start_lat, start_lon to API response in api.py
+  - REFACTOR: Update API docstrings and response type hints
+  - Test: Verify position matches source segment (pytest unit test)
+
+- [ ] **Create URL builder utility**
+  - RED: Test for build_adsb_exchange_url() fails
+  - GREEN: Implement function in api.py or new utils module
+  - GREEN: Build URL with icao24, date, timestamp, lat, lon, zoom params
+  - GREEN: Handle date formatting (ISO 8601 from Unix timestamp)
+  - REFACTOR: Extract constants (base URL, default zoom level)
+  - Test: URL format validation with concrete examples
+
+- [ ] **Build incident list UI component**
+  - RED: E2E/integration test that incident list not visible fails
+  - GREEN: Expand side panel to show incident table
+  - GREEN: Fetch incidents from /api/h3/incidents on cell click
+  - GREEN: Display table: timestamp, emergency type, icao24, confidence
+  - GREEN: Show loading state during API fetch
+  - GREEN: Handle empty results and errors gracefully
+  - REFACTOR: Extract incident table as reusable component
+  - Test: Table displays correct data for known test cell
+
+- [ ] **Add external link buttons**
+  - RED: Test for "View Flight Replay" button presence fails
+  - GREEN: Call build_adsb_exchange_url() for each incident
+  - GREEN: Render link button with flight icon
+  - GREEN: Open links in new tab (target="_blank" rel="noopener")
+  - GREEN: Style buttons for visibility
+  - Test: Link URLs contain all required parameters
+
+**Manual QC Checklist**:
+- [ ] Click H3 cell shows incident list (not just 5-line summary)
+- [ ] Each incident has "View Flight Replay" button
+- [ ] Clicking button opens ADS-B Exchange in new tab
+- [ ] ADS-B Exchange shows correct aircraft at correct time/position
+- [ ] Map auto-centers on incident location with appropriate zoom
+- [ ] Timeline positioned at emergency start time
+- [ ] Works for all 3 emergency types (7500/7600/7700)
+- [ ] Multiple incidents in same cell all have working links
+- [ ] Position data accurate (spot-check against raw segment data)
+
+**Implementation Notes**:
+- ADS-B Exchange URL format: `https://globe.adsbexchange.com/?icao={icao24}&showTrace={YYYY-MM-DD}&timestamp={unix}&lat={lat}&lon={lon}&zoom=10`
+- Position extracted from segment's first point (emergency start location)
+- No callsign needed (ADS-B Exchange works with ICAO24)
+- Metadata enrichment (aircraft type/operator) deferred to v2
+
+**Commit Messages**:
+- `feat: add position data to drill-down API for external links`
+- `feat: implement incident list UI with ADS-B Exchange replay links`
+
+---
+
+## Phase 12: Integration & Documentation ☐
 
 **Goal**: End-to-end validation and learnings documentation.
 

@@ -353,3 +353,60 @@ class TestH3DualMetrics:
             assert abs(rate - expected_rate) < 0.001, f"Rate should be {expected_rate}, got {rate}"
 
             conn.close()
+
+    def test_type_specific_incident_counters(
+        self, test_incidents_file: Path, test_segments_file: Path, duckdb_conn: duckdb.DuckDBPyConnection
+    ) -> None:
+        """Test that H3 aggregation includes separate counters for each emergency type.
+
+        Type-specific counters enable frontend filtering to show ALL cells containing
+        a specific type, not just cells where that type is predominant.
+        """
+        from aviation_anomaly.h3_aggregation import compute_dual_incident_metrics
+
+        output_file = Path(tempfile.gettempdir()) / "h3_type_counters.parquet"
+
+        # Compute metrics
+        compute_dual_incident_metrics(
+            incidents_files=test_incidents_file,
+            segments_files=test_segments_file,
+            output_file=output_file,
+            resolution=5,
+        )
+
+        # RED: These fields should exist but currently don't
+        result = duckdb_conn.execute(f"""
+            SELECT
+                h3_cell,
+                incidents_unique,
+                incidents_7500,
+                incidents_7600,
+                incidents_7700
+            FROM read_parquet('{output_file}')
+            WHERE incidents_unique > 0
+            ORDER BY h3_cell
+            LIMIT 5
+        """).fetchall()
+
+        assert len(result) > 0, "Should have H3 cells with incidents"
+
+        # Verify type-specific counters
+        for row in result:
+            h3_cell, inc_unique, inc_7500, inc_7600, inc_7700 = row
+
+            # Sum of type counters should equal total unique incidents
+            type_sum = inc_7500 + inc_7600 + inc_7700
+            assert type_sum == inc_unique, f"Cell {h3_cell}: type sum ({type_sum}) != unique ({inc_unique})"
+
+            # At least one type should be non-zero if total is non-zero
+            if inc_unique > 0:
+                assert (inc_7500 + inc_7600 + inc_7700) > 0, "At least one type should have incidents"
+
+        # Test data has 1x 7700 and 1x 7600, so verify those exist
+        all_7500 = sum(r[2] for r in result)
+        all_7600 = sum(r[3] for r in result)
+        all_7700 = sum(r[4] for r in result)
+
+        assert all_7500 == 0, "Test data has no 7500 incidents"
+        assert all_7600 > 0, "Test data has 7600 incident"
+        assert all_7700 > 0, "Test data has 7700 incident"

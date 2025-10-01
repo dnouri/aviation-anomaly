@@ -298,32 +298,36 @@
         window.currentResolution = currentResolution;
         window.displayMode = displayMode;
 
-        // Color schemes for different display modes
-        const absoluteColors = [
-            'interpolate',
-            ['linear'],
-            ['coalesce', ['get', 'incidents_unique'], 0],
-            0, '#fee5d9',
-            1, '#fcae91',
-            3, '#fb6a4a',
-            6, '#de2d26',
-            10, '#a50f15'
-        ];
-
-        const normalizedColors = [
-            'interpolate',
-            ['linear'],
-            ['*', ['coalesce', ['get', 'incident_rate'], 0], 1000000],
-            0, '#fee5d9',
-            1000, '#fcae91',
-            5000, '#fb6a4a',
-            10000, '#de2d26',
-            20000, '#a50f15'
-        ];
-
-        // Get current color scheme based on display mode
+        // Get current color scheme based on display mode and filter
         function getColorScheme() {
-            return displayMode === 'absolute' ? absoluteColors : normalizedColors;
+            const fieldName = currentFilter === 'all'
+                ? 'incidents_unique'
+                : `incidents_${currentFilter}`;
+
+            if (displayMode === 'absolute') {
+                return [
+                    'interpolate',
+                    ['linear'],
+                    ['coalesce', ['get', fieldName], 0],
+                    0, '#fee5d9',
+                    1, '#fcae91',
+                    3, '#fb6a4a',
+                    6, '#de2d26',
+                    10, '#a50f15'
+                ];
+            } else {
+                // Normalized mode uses total incident rate regardless of filter
+                return [
+                    'interpolate',
+                    ['linear'],
+                    ['*', ['coalesce', ['get', 'incident_rate'], 0], 1000000],
+                    0, '#fee5d9',
+                    1000, '#fcae91',
+                    5000, '#fb6a4a',
+                    10000, '#de2d26',
+                    20000, '#a50f15'
+                ];
+            }
         }
         
         // Add H3 layer with current resolution and filter
@@ -331,10 +335,11 @@
             const layerId = 'h3-cells';
             const sourceId = `h3-tiles-r${resolution}`;
             
-            // Build filter expression
+            // Build filter expression to show all cells containing the selected type
             let filterExpression = null;
             if (filter && filter !== 'all') {
-                filterExpression = ['==', ['get', 'predominant_emergency_type'], filter];
+                const fieldName = `incidents_${filter}`;
+                filterExpression = ['>', ['get', fieldName], 0];
             }
             
             // Add the layer
