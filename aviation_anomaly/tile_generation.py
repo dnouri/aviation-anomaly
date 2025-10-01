@@ -32,18 +32,27 @@ def export_h3_to_geojson(
     # Use SQL template that includes the COPY TO statement
     sql_path = Path(__file__).parent / "sql" / "h3_to_geojsonl.sql"
 
+    # Atomic write pattern
+    temp_file = output_file.with_suffix(".tmp")
+
     params = {
         "coverage_table": coverage_table,
         "incidents_table": incidents_table if incidents_table else "NULL",
         "has_incidents": incidents_table is not None,
-        "output_file": str(output_file),
+        "output_file": str(temp_file),
     }
 
     # Ensure output directory exists
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Execute the SQL with qck - it handles the templating and runs the COPY TO
-    qck(str(sql_path), params=params, connection=conn)
+    try:
+        qck(str(sql_path), params=params, connection=conn)
+        temp_file.rename(output_file)
+    except Exception:
+        if temp_file.exists():
+            temp_file.unlink()
+        raise
 
 
 def export_h3_files_to_geojson(

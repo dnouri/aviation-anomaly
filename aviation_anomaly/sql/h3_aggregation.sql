@@ -26,25 +26,21 @@ COPY (
     
     -- Aggregate by H3 cell
     cell_aggregates AS (
-        SELECT 
+        SELECT
             h3_cell,
             COUNT(DISTINCT segment_id) as unique_segments,
             COUNT(DISTINCT icao24) as unique_aircraft,
-            COUNT(*) as total_points,
-            LIST(DISTINCT segment_id) as segment_list,
-            LIST(DISTINCT icao24) as aircraft_list
+            COUNT(*) as total_points
         FROM segment_cells
         GROUP BY h3_cell
     )
-    
-    SELECT 
+
+    SELECT
         h3_cell,
         {{ resolution }} as h3_res,
         unique_segments,
         unique_aircraft,
-        total_points,
-        segment_list,
-        aircraft_list
+        total_points
     FROM cell_aggregates
     
 ) TO '{{ output_file }}' (FORMAT PARQUET, COMPRESSION 'zstd')

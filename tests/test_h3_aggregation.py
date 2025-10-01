@@ -115,7 +115,7 @@ class TestH3Aggregation:
 
         # Compute for resolutions 3-7
         compute_h3_coverage_multi_resolution(
-            segment_file=test_segments_file, output_dir=output_dir, resolutions=[3, 4, 5, 6, 7]
+            segment_files=test_segments_file, output_dir=output_dir, resolutions=[3, 4, 5, 6, 7]
         )
 
         # Verify files created for each resolution
@@ -231,6 +231,30 @@ class TestH3Aggregation:
 
         conn.close()
 
+    def test_atomic_write_no_temp_files(self, test_segments_file: Path, tmp_path: Path) -> None:
+        """Test that compute_h3_coverage uses atomic writes (no .tmp files remain)."""
+        from aviation_anomaly.h3_aggregation import compute_h3_coverage
+
+        output_file = tmp_path / "h3_coverage_atomic.parquet"
+
+        # Run aggregation
+        compute_h3_coverage(segment_file=test_segments_file, output_file=output_file, resolution=5)
+
+        # Verify output file exists
+        assert output_file.exists(), "Output file should exist"
+
+        # Verify NO temp files remain in directory
+        temp_files = list(tmp_path.glob("*.tmp"))
+        assert len(temp_files) == 0, f"No .tmp files should remain, found: {temp_files}"
+
+        # Verify output is valid parquet
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
+        result = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{output_file}')").fetchone()
+        assert result is not None
+        assert result[0] > 0, "Output file should contain data"
+        conn.close()
+
 
 class TestMultiCellSegmentCounting:
     """Test that segments crossing multiple cells are counted correctly."""
@@ -288,15 +312,6 @@ class TestMultiCellSegmentCounting:
 
         # Total segment counts should equal number of cells (not 1!)
         assert result[3] == result[0], "Each cell counts the segment once"  # type: ignore[index]
-
-        # Verify segment_list contains our segment
-        segment_lists = conn.execute(f"""
-            SELECT segment_list
-            FROM read_parquet('{output_file}')
-            LIMIT 1
-        """).fetchone()[0]  # type: ignore[index]
-
-        assert "flight001" in segment_lists, "Segment ID should be in segment_list"
 
         conn.close()
 
@@ -371,9 +386,7 @@ class TestMultiCellSegmentCounting:
             SELECT
                 unique_segments,
                 unique_aircraft,
-                total_points,
-                segment_list,
-                aircraft_list
+                total_points
             FROM read_parquet('{output_file}')
             WHERE h3_cell = {origin_cell}
         """).fetchone()
@@ -382,9 +395,6 @@ class TestMultiCellSegmentCounting:
             # Should have 2-3 segments depending on exact overlap
             assert result[0] >= 2, f"Origin should have at least 2 segments, got {result[0]}"
             assert result[1] >= 2, f"Origin should have at least 2 aircraft, got {result[1]}"
-
-            # Verify lists contain expected IDs
-            assert "flight001" in result[3] or "flight002" in result[3], "Should contain expected segments"
 
         conn.close()
 
@@ -533,14 +543,7 @@ class TestNullCoordinateHandling:
         # Note: total_points is summed across cells, so may be higher if points repeat in cells
         assert result[2] >= 7, f"Should have at least 7 valid points aggregated, got {result[2]}"  # type: ignore[index]
 
-        # Verify segment appears in results
-        segment_check = conn.execute(f"""
-            SELECT COUNT(*)
-            FROM read_parquet('{output_file}')
-            WHERE 'flight_null' = ANY(segment_list)
-        """).fetchone()[0]  # type: ignore[index]
-
-        assert segment_check > 0, "Segment should appear despite NULL coordinates"
+        # Segment presence is already verified by result[0] > 0 and result[3] == 1
 
         conn.close()
 
@@ -820,6 +823,281 @@ class TestCellHierarchyConsistency:
         conn.close()
 
 
+class TestH3DailyMerge:
+    """Test merging per-day H3 coverage files into final aggregate."""
+
+    def test_merge_coverage_sums_counts_and_drops_lists(self, tmp_path: Path) -> None:
+        """Test that merge sums counts across days and drops segment/aircraft lists."""
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
+        conn.execute("SET memory_limit = '100MB'")
+
+        # Create daily directory
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+
+        # Create Day 1 coverage file with 2 cells
+        day1_file = daily_dir / "h3_coverage_r5_2025-07-01.parquet"
+        conn.execute(f"""
+            COPY (
+                SELECT
+                    599686042433355775::BIGINT as h3_cell,
+                    5 as h3_res,
+                    10 as unique_segments,
+                    8 as unique_aircraft,
+                    100 as total_points,
+                    ['seg1', 'seg2'] as segment_list,
+                    ['plane1', 'plane2'] as aircraft_list
+                UNION ALL
+                SELECT
+                    599686042433355776::BIGINT as h3_cell,
+                    5 as h3_res,
+                    5 as unique_segments,
+                    4 as unique_aircraft,
+                    50 as total_points,
+                    ['seg3'] as segment_list,
+                    ['plane3'] as aircraft_list
+            ) TO '{day1_file}' (FORMAT PARQUET)
+        """)
+
+        # Create Day 2 coverage file with 1 overlapping cell, 1 new cell
+        day2_file = daily_dir / "h3_coverage_r5_2025-07-02.parquet"
+        conn.execute(f"""
+            COPY (
+                SELECT
+                    599686042433355775::BIGINT as h3_cell,
+                    5 as h3_res,
+                    15 as unique_segments,
+                    12 as unique_aircraft,
+                    150 as total_points,
+                    ['seg4', 'seg5', 'seg6'] as segment_list,
+                    ['plane4', 'plane5'] as aircraft_list
+                UNION ALL
+                SELECT
+                    599686042433355777::BIGINT as h3_cell,
+                    5 as h3_res,
+                    3 as unique_segments,
+                    2 as unique_aircraft,
+                    30 as total_points,
+                    ['seg7'] as segment_list,
+                    ['plane6'] as aircraft_list
+            ) TO '{day2_file}' (FORMAT PARQUET)
+        """)
+
+        # Call merge function
+        from aviation_anomaly.h3_aggregation import merge_h3_daily_coverage
+
+        output_file = tmp_path / "h3_coverage_r5.parquet"
+        merge_h3_daily_coverage(daily_dir=daily_dir, output_file=output_file, resolution=5)
+
+        # Verify merged output
+        result = conn.execute(f"""
+            SELECT
+                h3_cell,
+                h3_res,
+                unique_segments,
+                unique_aircraft,
+                total_points
+            FROM read_parquet('{output_file}')
+            ORDER BY h3_cell
+        """).fetchall()
+
+        # Should have 3 cells total (2 from day1, 2 from day2, 1 overlapping)
+        assert len(result) == 3, f"Expected 3 cells, got {len(result)}"
+
+        # Check first cell (overlapping): should have summed values
+        cell1 = result[0]
+        assert cell1[0] == 599686042433355775
+        assert cell1[1] == 5
+        assert cell1[2] == 25, f"Expected 10+15=25 segments, got {cell1[2]}"  # 10 from day1 + 15 from day2
+        assert cell1[3] == 20, f"Expected 8+12=20 aircraft, got {cell1[3]}"  # 8 from day1 + 12 from day2
+        assert cell1[4] == 250, f"Expected 100+150=250 points, got {cell1[4]}"  # 100 from day1 + 150 from day2
+
+        # Check second cell (day1 only)
+        cell2 = result[1]
+        assert cell2[0] == 599686042433355776
+        assert cell2[2] == 5  # Only from day1
+
+        # Check third cell (day2 only)
+        cell3 = result[2]
+        assert cell3[0] == 599686042433355777
+        assert cell3[2] == 3  # Only from day2
+
+        # Verify lists are NOT in output schema
+        schema = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{output_file}')").fetchall()
+        column_names = [row[0] for row in schema]
+        assert "segment_list" not in column_names, "segment_list should be dropped in merge"
+        assert "aircraft_list" not in column_names, "aircraft_list should be dropped in merge"
+
+        conn.close()
+
+    def test_merge_incidents_recalculates_mode_and_merges_lists(self, tmp_path: Path) -> None:
+        """Test that merge merges emergency type lists and correctly recalculates MODE."""
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
+        conn.execute("SET memory_limit = '100MB'")
+
+        # Create daily directory
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+
+        # Create Day 1 incidents file - cell has 7500 (3x) and 7700 (1x)
+        day1_file = daily_dir / "h3_incidents_r5_2025-07-01.parquet"
+        conn.execute(f"""
+            COPY (
+                SELECT
+                    599686042433355775::BIGINT as h3_cell,
+                    5 as h3_res,
+                    3 as incidents_unique,
+                    3 as aircraft_with_incidents,
+                    4 as incidents_coverage,
+                    100 as unique_segments,
+                    100 as total_segments,
+                    ['7500', '7700'] as emergency_types_list,
+                    2 as emergency_type_diversity,
+                    '7500' as predominant_emergency_type,  -- MODE from day 1
+                    0.03 as incident_rate
+            ) TO '{day1_file}' (FORMAT PARQUET)
+        """)
+
+        # Create Day 2 incidents file - same cell has 7700 (4x), making it new MODE
+        day2_file = daily_dir / "h3_incidents_r5_2025-07-02.parquet"
+        conn.execute(f"""
+            COPY (
+                SELECT
+                    599686042433355775::BIGINT as h3_cell,
+                    5 as h3_res,
+                    4 as incidents_unique,
+                    4 as aircraft_with_incidents,
+                    4 as incidents_coverage,
+                    150 as unique_segments,
+                    150 as total_segments,
+                    ['7700'] as emergency_types_list,
+                    1 as emergency_type_diversity,
+                    '7700' as predominant_emergency_type,  -- MODE from day 2
+                    0.027 as incident_rate
+            ) TO '{day2_file}' (FORMAT PARQUET)
+        """)
+
+        # Call merge function
+        from aviation_anomaly.h3_aggregation import merge_h3_daily_incidents
+
+        output_file = tmp_path / "h3_incidents_r5.parquet"
+        merge_h3_daily_incidents(daily_dir=daily_dir, output_file=output_file, resolution=5)
+
+        # Verify merged output
+        result = conn.execute(f"""
+            SELECT
+                h3_cell,
+                h3_res,
+                incidents_unique,
+                aircraft_with_incidents,
+                incidents_coverage,
+                unique_segments,
+                total_segments,
+                emergency_types_list,
+                emergency_type_diversity,
+                predominant_emergency_type,
+                incident_rate
+            FROM read_parquet('{output_file}')
+        """).fetchone()
+
+        assert result is not None, "Merge should produce output"
+
+        # Verify summed counts
+        assert result[2] == 7, f"Expected 3+4=7 incidents_unique, got {result[2]}"
+        assert result[3] == 7, f"Expected 3+4=7 aircraft_with_incidents, got {result[3]}"
+        assert result[4] == 8, f"Expected 4+4=8 incidents_coverage, got {result[4]}"
+        assert result[5] == 250, f"Expected 100+150=250 unique_segments, got {result[5]}"
+
+        # Verify emergency type list merged correctly (both types present)
+        emergency_types = result[7]
+        assert "7500" in emergency_types, "7500 should be in merged list"
+        assert "7700" in emergency_types, "7700 should be in merged list"
+        assert len(emergency_types) == 2, f"Expected 2 unique types, got {len(emergency_types)}"
+
+        # Verify diversity is correct
+        assert result[8] == 2, f"Expected diversity=2, got {result[8]}"
+
+        # Verify MODE is 7700 (appears 5 times: 1 from day1 + 4 from day2, vs 3 times for 7500)
+        assert result[9] == "7700", f"Expected predominant_emergency_type='7700', got {result[9]}"
+
+        # Verify recalculated incident rate
+        expected_rate = 7 / 250  # incidents_unique / unique_segments
+        assert abs(result[10] - expected_rate) < 0.001, f"Expected rate={expected_rate}, got {result[10]}"
+
+        conn.close()
+
+    def test_merge_mapping_deduplicates_pairs(self, tmp_path: Path) -> None:
+        """Test that mapping merge deduplicates (incident_id, h3_cell) pairs."""
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL h3 FROM community; LOAD h3")
+        conn.execute("SET memory_limit = '100MB'")
+
+        # Create daily directory
+        daily_dir = tmp_path / "daily"
+        daily_dir.mkdir()
+
+        # Create Day 1 mapping - incident spans 2 cells
+        day1_file = daily_dir / "incident_h3_mapping_r5_2025-07-01.parquet"
+        conn.execute(f"""
+            COPY (
+                SELECT 'INC001' as incident_id, 599686042433355775::BIGINT as h3_cell, 5 as h3_res
+                UNION ALL
+                SELECT 'INC001' as incident_id, 599686042433355776::BIGINT as h3_cell, 5 as h3_res
+                UNION ALL
+                SELECT 'INC002' as incident_id, 599686042433355777::BIGINT as h3_cell, 5 as h3_res
+            ) TO '{day1_file}' (FORMAT PARQUET)
+        """)
+
+        # Create Day 2 mapping - INC001 reappears (midnight-spanning), new INC003
+        day2_file = daily_dir / "incident_h3_mapping_r5_2025-07-02.parquet"
+        conn.execute(f"""
+            COPY (
+                SELECT 'INC001' as incident_id, 599686042433355775::BIGINT as h3_cell, 5 as h3_res
+                UNION ALL
+                SELECT 'INC001' as incident_id, 599686042433355778::BIGINT as h3_cell, 5 as h3_res
+                UNION ALL
+                SELECT 'INC003' as incident_id, 599686042433355779::BIGINT as h3_cell, 5 as h3_res
+            ) TO '{day2_file}' (FORMAT PARQUET)
+        """)
+
+        # Call merge function
+        from aviation_anomaly.h3_aggregation import merge_incident_h3_mapping
+
+        output_file = tmp_path / "incident_h3_mapping_r5.parquet"
+        merge_incident_h3_mapping(daily_dir=daily_dir, output_file=output_file, resolution=5)
+
+        # Verify merged output
+        result = conn.execute(f"""
+            SELECT incident_id, h3_cell, h3_res
+            FROM read_parquet('{output_file}')
+            ORDER BY incident_id, h3_cell
+        """).fetchall()
+
+        # Should have 5 unique pairs:
+        # INC001 → cell 775 (day1 & day2, deduplicated)
+        # INC001 → cell 776 (day1 only)
+        # INC001 → cell 778 (day2 only)
+        # INC002 → cell 777 (day1 only)
+        # INC003 → cell 779 (day2 only)
+        assert len(result) == 5, f"Expected 5 unique pairs, got {len(result)}"
+
+        # Verify INC001 has 3 cells (not 4, since 775 is deduplicated)
+        inc001_pairs = [r for r in result if r[0] == "INC001"]
+        assert len(inc001_pairs) == 3, f"Expected INC001 to have 3 cells, got {len(inc001_pairs)}"
+
+        # Verify cell 775 appears only once for INC001
+        inc001_cells = [r[1] for r in inc001_pairs]
+        assert inc001_cells.count(599686042433355775) == 1, "Cell 775 should appear once (deduplicated)"
+
+        # Verify all pairs have correct resolution
+        for row in result:
+            assert row[2] == 5, f"Expected h3_res=5, got {row[2]}"
+
+        conn.close()
+
+
 class TestSinglePointEdgeCases:
     """Test edge cases with minimal data."""
 
@@ -867,19 +1145,19 @@ class TestSinglePointEdgeCases:
         output_file = tmp_path / "h3_edge_cases.parquet"
         compute_h3_coverage(segment_file=segments_file, output_file=output_file, resolution=5)
 
-        # Check results
+        # Check results - should only have cells from the valid segment
         result = conn.execute(f"""
             SELECT
-                array_agg(DISTINCT segment_id) as segment_ids
-            FROM (
-                SELECT unnest(segment_list) as segment_id
-                FROM read_parquet('{output_file}')
-            )
-        """).fetchone()[0]  # type: ignore[index]
+                COUNT(*) as cell_count,
+                SUM(unique_segments) as total_segments
+            FROM read_parquet('{output_file}')
+        """).fetchone()
 
-        # Only valid001 should appear (single001 filtered by WHERE point_count >= 2)
-        assert "valid001" in result, "Valid segment should be included"
-        assert "single001" not in result, "Single-point segment should be filtered"
+        # Should have some cells from valid001
+        assert result[0] > 0, "Should have H3 cells from valid segment"  # type: ignore[index]
+        # Each cell should count exactly 1 segment (the valid one)
+        # Single-point segment should be filtered by WHERE point_count >= 2
+        assert result[1] == result[0], "Each cell should have exactly 1 segment (valid001)"  # type: ignore[index]
 
         conn.close()
 
