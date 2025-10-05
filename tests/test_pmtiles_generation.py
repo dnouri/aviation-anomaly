@@ -132,6 +132,56 @@ def test_generate_pmtiles_success(tmp_path):
             assert str(output_file) in cmd
 
 
+def test_generate_pmtiles_preserves_type_specific_fields(tmp_path):
+    """Test that type-specific incident counts are in the preserve list."""
+    input_file = tmp_path / "input.geojsonl.gz"
+    output_file = tmp_path / "output.pmtiles"
+
+    # Create compressed GeoJSONL with type-specific fields
+    import gzip
+
+    features = [
+        json.dumps(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[-122, 37], [-122, 38], [-121, 38], [-121, 37], [-122, 37]]],
+                },
+                "properties": {
+                    "h3_cell": "832830fffffffff",
+                    "h3_res": 3,
+                    "unique_segments": 10,
+                    "incidents_unique": 5,
+                    "incidents_7500": 2,
+                    "incidents_7600": 1,
+                    "incidents_7700": 2,
+                },
+            }
+        )
+    ]
+
+    with gzip.open(input_file, "wt") as f:
+        for feature in features:
+            f.write(feature + "\n")
+
+    with patch("aviation_anomaly.pmtiles_generation.check_tippecanoe_installed", return_value=True):
+        with patch("subprocess.run") as mock_run:
+            # Simulate successful execution
+            mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+            output_file.write_bytes(b"fake pmtiles")
+
+            generate_pmtiles(input_file, output_file, resolution=3, preserve_all_attributes=False)
+
+            # Verify command includes type-specific fields
+            cmd = mock_run.call_args[0][0]
+            cmd_str = " ".join(cmd)
+
+            assert "--include incidents_7500" in cmd_str, "Must preserve incidents_7500"
+            assert "--include incidents_7600" in cmd_str, "Must preserve incidents_7600"
+            assert "--include incidents_7700" in cmd_str, "Must preserve incidents_7700"
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(
     not subprocess.run(["which", "tippecanoe"], capture_output=True).returncode == 0, reason="Tippecanoe not installed"

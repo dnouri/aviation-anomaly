@@ -91,7 +91,7 @@ def test_export_h3_with_incidents():
             ['ABC123', 'XYZ789'] as aircraft_list
     """)
 
-    # Create incident data
+    # Create incident data with type-specific counts
     conn.execute(f"""
         CREATE TABLE test_incidents AS
         SELECT
@@ -105,7 +105,10 @@ def test_export_h3_with_incidents():
             ['7700'] as emergency_types_list,
             1 as emergency_type_diversity,
             '7700' as predominant_emergency_type,
-            0.5 as incident_rate
+            0.5 as incident_rate,
+            0.0 as incidents_7500,
+            0.0 as incidents_7600,
+            1.0 as incidents_7700
     """)
 
     from aviation_anomaly.tile_generation import export_h3_to_geojson
@@ -155,7 +158,7 @@ def test_export_coverage_without_incidents():
         ) AS t(h3_cell, h3_res, unique_segments, unique_aircraft, total_points, segment_list, aircraft_list)
     """)
 
-    # Create incidents for only one cell
+    # Create incidents for only one cell with type-specific counts
     conn.execute(f"""
         CREATE TABLE test_incidents AS
         SELECT
@@ -169,7 +172,10 @@ def test_export_coverage_without_incidents():
             ['7500'] as emergency_types_list,
             1 as emergency_type_diversity,
             '7500' as predominant_emergency_type,
-            1.0 as incident_rate
+            1.0 as incident_rate,
+            1.0 as incidents_7500,
+            0.0 as incidents_7600,
+            0.0 as incidents_7700
     """)
 
     from aviation_anomaly.tile_generation import export_h3_to_geojson
@@ -202,3 +208,77 @@ def test_export_coverage_without_incidents():
                 break
         else:
             pytest.fail("Cell without incidents not found in output")
+
+
+def test_export_preserves_type_specific_incident_counts():
+    """Test that type-specific incident counts are preserved in GeoJSONL export."""
+    conn = duckdb.connect()
+    conn.execute("INSTALL h3 FROM community; LOAD h3; INSTALL spatial; LOAD spatial")
+
+    test_cell = 0x8327FFFFFFFFFFF
+
+    # Create minimal coverage data
+    conn.execute(f"""
+        CREATE TABLE test_coverage AS
+        SELECT
+            CAST({test_cell} AS UBIGINT) as h3_cell,
+            3 as h3_res,
+            5 as unique_segments,
+            5 as unique_aircraft,
+            500 as total_points,
+            ['SEG001', 'SEG002', 'SEG003', 'SEG004', 'SEG005'] as segment_list,
+            ['ABC123', 'DEF456', 'GHI789', 'JKL012', 'MNO345'] as aircraft_list
+    """)
+
+    # Create incident data with type-specific counts matching real schema
+    conn.execute(f"""
+        CREATE TABLE test_incidents AS
+        SELECT
+            CAST({test_cell} AS UBIGINT) as h3_cell,
+            3 as h3_res,
+            5.0 as incidents_unique,
+            3 as aircraft_with_incidents,
+            8.0 as incidents_coverage,
+            3 as unique_segments,
+            5 as total_segments,
+            ['7500', '7600', '7700'] as emergency_types_list,
+            3 as emergency_type_diversity,
+            '7700' as predominant_emergency_type,
+            0.025 as incident_rate,
+            2.0 as incidents_7500,
+            1.0 as incidents_7600,
+            2.0 as incidents_7700
+    """)
+
+    from aviation_anomaly.tile_generation import export_h3_to_geojson
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_file = Path(tmpdir) / "test_type_specific.geojsonl.gz"
+
+        export_h3_to_geojson(
+            conn, coverage_table="test_coverage", incidents_table="test_incidents", output_file=output_file
+        )
+
+        # Read and parse GeoJSONL
+        import gzip
+
+        with gzip.open(output_file, "rt") as f:
+            lines = f.readlines()
+
+        assert len(lines) == 1, "Should have exactly one feature"
+        feature = json.loads(lines[0])
+        props = feature["properties"]
+
+        # Verify basic incident fields exist
+        assert props["incidents_unique"] == 5.0
+        assert props["predominant_emergency_type"] == "7700"
+
+        # Verify type-specific counts are preserved
+        assert "incidents_7500" in props, "incidents_7500 field must be present"
+        assert "incidents_7600" in props, "incidents_7600 field must be present"
+        assert "incidents_7700" in props, "incidents_7700 field must be present"
+
+        # Verify correct values
+        assert props["incidents_7500"] == 2.0, "incidents_7500 should equal 2.0"
+        assert props["incidents_7600"] == 1.0, "incidents_7600 should equal 1.0"
+        assert props["incidents_7700"] == 2.0, "incidents_7700 should equal 2.0"

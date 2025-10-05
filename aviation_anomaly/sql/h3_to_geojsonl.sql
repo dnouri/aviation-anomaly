@@ -28,7 +28,12 @@ COPY (
             i.emergency_types_list,
             i.emergency_type_diversity,
             i.predominant_emergency_type,
-            i.incident_rate
+            i.incident_rate,
+            -- Type-specific incident counters for emergency type filtering
+            -- See pmtiles_generation.py for Tippecanoe attribute preservation
+            i.incidents_7500,
+            i.incidents_7600,
+            i.incidents_7700
             {% else %}
             NULL as incidents_unique,
             NULL as aircraft_with_incidents,
@@ -38,7 +43,10 @@ COPY (
             NULL as emergency_types_list,
             NULL as emergency_type_diversity,
             NULL as predominant_emergency_type,
-            NULL as incident_rate
+            NULL as incident_rate,
+            NULL as incidents_7500,
+            NULL as incidents_7600,
+            NULL as incidents_7700
             {% endif %}
         FROM {{ coverage_table }} c
         {% if has_incidents %}
@@ -64,7 +72,10 @@ COPY (
                     'emergency_types_list', emergency_types_list,
                     'emergency_type_diversity', emergency_type_diversity,
                     'predominant_emergency_type', predominant_emergency_type,
-                    'incident_rate', incident_rate
+                    'incident_rate', incident_rate,
+                    'incidents_7500', incidents_7500,
+                    'incidents_7600', incidents_7600,
+                    'incidents_7700', incidents_7700
                 )
             ) as feature
         FROM combined

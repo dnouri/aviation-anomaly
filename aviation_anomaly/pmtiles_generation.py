@@ -140,11 +140,16 @@ def generate_pmtiles(
     else:
         # Preserve key attributes for visualization
         # These must match exactly what's in the GeoJSONL
+        # See sql/h3_to_geojsonl.sql for field definitions
         key_attributes = [
             "h3_cell",
             "h3_res",
             "incidents_unique",
             "incidents_coverage",
+            # Type-specific counters for emergency type filtering
+            "incidents_7500",
+            "incidents_7600",
+            "incidents_7700",
             "unique_segments",
             "incident_rate",
             "predominant_emergency_type",
