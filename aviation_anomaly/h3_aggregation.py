@@ -256,7 +256,11 @@ def compute_dual_incident_metrics(
             daily_metrics_file = daily_dir / f"h3_incidents_r{resolution}_{date_str}.parquet"
             temp_metrics_file = daily_metrics_file.with_suffix(".tmp")
 
-            # Check staleness
+            # Check staleness (intra-command optimization)
+            # NOTE: The Makefile handles whether to run `aggregate` at all based on
+            # SQL file changes and upstream dependencies. This check is a performance
+            # optimization WITHIN one aggregate run - it skips daily files that are
+            # already up to date relative to their input data files.
             if (
                 daily_metrics_file.exists()
                 and daily_metrics_file.stat().st_mtime > incidents_file.stat().st_mtime

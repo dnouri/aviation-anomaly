@@ -108,3 +108,329 @@ validate-sql: ## Validate SQL syntax in sql/ directory
 	@echo "Validating SQL files..."
 	uv run python -m aviation_anomaly.validate_sql
 	@echo "✓ SQL validation complete"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PIPELINE ORCHESTRATION
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The following targets orchestrate the data processing pipeline from raw
+# ADS-B data to interactive web tiles. Make handles dependency tracking and
+# incremental builds automatically.
+#
+# QUICK START:
+#   make pipeline-help        - Show pipeline-specific help
+#   make pipeline-all         - Run complete pipeline
+#   make pipeline-check       - Verify pipeline dependencies
+#   make pipeline-clean-tiles - Remove tiles to force regeneration
+#
+# DEPENDENCY GRAPH:
+#
+#   Raw ADS-B Data (data/raw/states_YYYY-MM-DD.parquet)
+#       ↓
+#   Flight Segments (data/segments/segments_YYYY-MM-DD.parquet)
+#       ↓  depends on: segment_pipeline.sql, config.toml
+#   Incident Detection (data/incidents/incidents_YYYY-MM-DD.parquet)
+#       ↓  depends on: incident_detection.sql, config.toml
+#   H3 Daily Aggregation (data/h3/daily/h3_incidents_rN_YYYY-MM-DD.parquet)
+#       ↓  depends on: h3_incident_metrics.sql
+#   H3 Merged (data/h3/h3_incidents_rN.parquet)
+#       ↓  depends on: h3_incidents_merge.sql, all daily files
+#   GeoJSON Export (data/tiles/geojsonl/h3_rN.geojsonl.gz)
+#       ↓  depends on: h3_to_geojsonl.sql
+#   PMTiles Web Tiles (data/tiles/pmtiles/h3_rN.pmtiles)
+#       ↓  depends on: pmtiles_generation.py
+#   Interactive Web Map (served via aviation-anomaly serve)
+#
+# WHY MAKE FOR PIPELINE?
+#   - Automatic dependency tracking: delete any intermediate file, Make knows
+#     what to rebuild downstream
+#   - Code dependencies: changing SQL/Python triggers appropriate rebuilds
+#   - Incremental builds: only regenerates what changed
+#   - Parallel execution: use `make -j4 pipeline-all` for parallel processing
+#   - Single source of truth: all staleness logic in one place (no scattered
+#     if-statements in shell or Python)
+#
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────────────────
+# PIPELINE CONFIGURATION
+# ───────────────────────────────────────────────────────────────────────────
+
+# Dates to process (modify this for your data range)
+PIPELINE_DATES := 2025-07-02 2025-07-03 2025-07-04 2025-07-05 2025-07-06 2025-07-07
+
+# H3 resolutions to generate (3=coarse, 7=fine)
+PIPELINE_RESOLUTIONS := 3 4 5 6 7
+
+# Directories (keep in sync with config.toml)
+PIPELINE_RAW_DIR := data/raw
+PIPELINE_SEGMENTS_DIR := data/segments
+PIPELINE_INCIDENTS_DIR := data/incidents
+PIPELINE_H3_DIR := data/h3
+PIPELINE_H3_DAILY_DIR := $(PIPELINE_H3_DIR)/daily
+PIPELINE_TILES_DIR := data/tiles
+PIPELINE_GEOJSON_DIR := $(PIPELINE_TILES_DIR)/geojsonl
+PIPELINE_PMTILES_DIR := $(PIPELINE_TILES_DIR)/pmtiles
+
+# Code dependencies (SQL and Python that affect outputs)
+PIPELINE_SQL_DIR := aviation_anomaly/sql
+PIPELINE_SEGMENT_SQL := $(PIPELINE_SQL_DIR)/segment_pipeline.sql
+PIPELINE_INCIDENT_SQL := $(PIPELINE_SQL_DIR)/incident_detection.sql
+PIPELINE_H3_METRICS_SQL := $(PIPELINE_SQL_DIR)/h3_incident_metrics.sql
+PIPELINE_H3_MERGE_SQL := $(PIPELINE_SQL_DIR)/h3_incidents_merge.sql
+PIPELINE_GEOJSON_SQL := $(PIPELINE_SQL_DIR)/h3_to_geojsonl.sql
+PIPELINE_PMTILES_PY := aviation_anomaly/pmtiles_generation.py
+
+# Configuration file affects all stages
+PIPELINE_CONFIG := config.toml
+
+# CLI wrapper
+PIPELINE_CLI := uv run aviation-anomaly --config $(PIPELINE_CONFIG)
+
+# ───────────────────────────────────────────────────────────────────────────
+# PHONY TARGETS (pipeline-specific)
+# ───────────────────────────────────────────────────────────────────────────
+
+.PHONY: pipeline-help pipeline-all pipeline-check pipeline-clean \
+        pipeline-clean-segments pipeline-clean-incidents \
+        pipeline-clean-h3 pipeline-clean-tiles \
+        pipeline-segments pipeline-incidents \
+        pipeline-h3-merged pipeline-geojson pipeline-pmtiles
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PIPELINE HELP
+# ═══════════════════════════════════════════════════════════════════════════
+
+pipeline-help: ## Show pipeline orchestration help
+	@echo "════════════════════════════════════════════════════════════════════"
+	@echo "  Aviation Anomaly Pipeline - Data Processing Targets"
+	@echo "════════════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "MAIN TARGETS:"
+	@echo "  make pipeline-all         - Run complete pipeline (recommended)"
+	@echo "  make pipeline-segments    - Generate flight segments from raw data"
+	@echo "  make pipeline-incidents   - Detect emergency incidents from segments"
+	@echo "  make pipeline-h3-merged   - Aggregate incidents to H3 cells"
+	@echo "  make pipeline-geojson     - Export H3 data to GeoJSON format"
+	@echo "  make pipeline-pmtiles     - Generate PMTiles for web visualization"
+	@echo ""
+	@echo "UTILITIES:"
+	@echo "  make pipeline-check       - Verify dependencies (DuckDB, Tippecanoe)"
+	@echo "  make pipeline-clean       - Remove ALL generated files"
+	@echo "  make pipeline-clean-tiles - Remove only tiles (for schema changes)"
+	@echo ""
+	@echo "CONFIGURATION:"
+	@echo "  Dates:       $(PIPELINE_DATES)"
+	@echo "  Resolutions: $(PIPELINE_RESOLUTIONS)"
+	@echo ""
+	@echo "PARALLEL EXECUTION:"
+	@echo "  make -j4 pipeline-all     - Run with 4 parallel jobs (faster)"
+	@echo ""
+	@echo "INCREMENTAL BUILDS:"
+	@echo "  Make automatically detects changes and rebuilds only what's needed."
+	@echo "  Example: Delete data/tiles/geojsonl/* to force PMTiles regeneration"
+	@echo "  Example: Edit h3_to_geojsonl.sql to trigger GeoJSON + PMTiles rebuild"
+	@echo ""
+	@echo "LOGGING:"
+	@echo "  make pipeline-all 2>&1 | tee logs/run.log"
+	@echo ""
+	@echo "════════════════════════════════════════════════════════════════════"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FILE LISTS (computed from configuration)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Segment files (one per date)
+PIPELINE_SEGMENT_FILES := $(foreach date,$(PIPELINE_DATES),$(PIPELINE_SEGMENTS_DIR)/segments_$(date).parquet)
+
+# Incident files (one per date)
+PIPELINE_INCIDENT_FILES := $(foreach date,$(PIPELINE_DATES),$(PIPELINE_INCIDENTS_DIR)/incidents_$(date).parquet)
+
+# H3 merged files (one per resolution) - using this as the target instead of daily
+PIPELINE_H3_MERGED_FILES := $(foreach res,$(PIPELINE_RESOLUTIONS),$(PIPELINE_H3_DIR)/h3_incidents_r$(res).parquet)
+
+# GeoJSON files (one per resolution)
+PIPELINE_GEOJSON_FILES := $(foreach res,$(PIPELINE_RESOLUTIONS),$(PIPELINE_GEOJSON_DIR)/h3_r$(res).geojsonl.gz)
+
+# PMTiles files (one per resolution)
+PIPELINE_PMTILES_FILES := $(foreach res,$(PIPELINE_RESOLUTIONS),$(PIPELINE_PMTILES_DIR)/h3_r$(res).pmtiles)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TOP-LEVEL TARGETS
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Build everything from raw data to web tiles
+pipeline-all: $(PIPELINE_PMTILES_FILES) ## Run complete pipeline
+	@echo "✓ Pipeline complete! All tiles generated."
+	@echo "  Start server: $(PIPELINE_CLI) serve --port 8000"
+	@echo "  View at:      http://localhost:8000"
+
+# Convenience targets for incremental builds
+pipeline-segments: $(PIPELINE_SEGMENT_FILES) ## Generate flight segments
+pipeline-incidents: $(PIPELINE_INCIDENT_FILES) ## Detect incidents
+pipeline-h3-merged: $(PIPELINE_H3_MERGED_FILES) ## Aggregate to H3 cells
+pipeline-geojson: $(PIPELINE_GEOJSON_FILES) ## Export to GeoJSON
+pipeline-pmtiles: $(PIPELINE_PMTILES_FILES) ## Generate PMTiles
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PATTERN RULES: SEGMENTATION
+# ═══════════════════════════════════════════════════════════════════════════
+# Converts raw ADS-B position data into flight segments by grouping points
+# that belong to the same flight. Segments are defined by temporal and spatial
+# gaps (see config.toml for thresholds).
+#
+# Dependencies:
+#   - Raw data file for the specific date
+#   - Segmentation SQL (algorithm logic)
+#   - Config file (gap thresholds, min duration, etc.)
+#
+# Why this matters: If you change segmentation logic or thresholds, Make will
+# automatically rebuild segments AND everything downstream (incidents, H3, tiles).
+
+$(PIPELINE_SEGMENTS_DIR)/segments_%.parquet: $(PIPELINE_RAW_DIR)/states_%.parquet $(PIPELINE_SEGMENT_SQL) $(PIPELINE_CONFIG)
+	@echo "═══ Segmenting: $* ═══"
+	@mkdir -p $(PIPELINE_SEGMENTS_DIR)
+	$(PIPELINE_CLI) segment --date $* --output-dir $(PIPELINE_SEGMENTS_DIR)
+	@echo "✓ Segments generated: $@"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PATTERN RULES: INCIDENT DETECTION
+# ═══════════════════════════════════════════════════════════════════════════
+# Analyzes flight segments to identify emergency squawk codes (7500, 7600, 7700)
+# and applies filtering rules to reduce false positives.
+#
+# Dependencies:
+#   - Segment file for the specific date
+#   - Detection SQL (squawk code logic, filtering rules)
+#   - Config file (confidence thresholds, duration limits)
+#
+# Why this matters: If you tune detection filters or change squawk analysis,
+# Make rebuilds incidents AND downstream H3 aggregations automatically.
+
+$(PIPELINE_INCIDENTS_DIR)/incidents_%.parquet: $(PIPELINE_SEGMENTS_DIR)/segments_%.parquet $(PIPELINE_INCIDENT_SQL) $(PIPELINE_CONFIG)
+	@echo "═══ Detecting incidents: $* ═══"
+	@mkdir -p $(PIPELINE_INCIDENTS_DIR)
+	$(PIPELINE_CLI) detect --date $* \
+		--segments-dir $(PIPELINE_SEGMENTS_DIR) \
+		--output-dir $(PIPELINE_INCIDENTS_DIR) \
+		--filter-profile production \
+		--stats
+	@echo "✓ Incidents detected: $@"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PATTERN RULES: H3 AGGREGATION
+# ═══════════════════════════════════════════════════════════════════════════
+# Aggregates incidents and segments to H3 hexagonal cells. The CLI handles both
+# daily aggregation and merging internally, so we model the merged file as the
+# target that depends on ALL incident and segment files.
+#
+# Dependencies:
+#   - ALL incident files (across all dates)
+#   - ALL segment files (for coverage metrics)
+#   - H3 aggregation SQL (both daily metrics and merge logic)
+#
+# Why this matters: Adding a new date triggers re-aggregation. Changing H3 SQL
+# (e.g., adding type-specific counters) triggers rebuild of H3 AND tiles.
+#
+# Note: The CLI runs the full aggregation (daily + merge) as one command. This
+# is less granular than ideal, but matches current CLI design. Future: could
+# split into separate daily and merge commands for better incrementalism.
+
+$(PIPELINE_H3_DIR)/h3_incidents_r%.parquet: $(PIPELINE_INCIDENT_FILES) $(PIPELINE_SEGMENT_FILES) $(PIPELINE_H3_METRICS_SQL) $(PIPELINE_H3_MERGE_SQL)
+	@echo "═══ H3 aggregation: resolution $* ═══"
+	@mkdir -p $(PIPELINE_H3_DIR)
+	$(PIPELINE_CLI) aggregate --output-dir $(PIPELINE_H3_DIR) --resolutions $*
+	@echo "✓ H3 aggregation complete: $@"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PATTERN RULES: GEOJSON EXPORT
+# ═══════════════════════════════════════════════════════════════════════════
+# Exports H3 aggregated data to GeoJSONL format (newline-delimited GeoJSON).
+# This is an intermediate format used by Tippecanoe for PMTiles generation.
+#
+# Dependencies:
+#   - Merged H3 file for this resolution
+#   - GeoJSON export SQL (field selection, geometry conversion)
+#
+# Why this matters: If you add new fields to H3 data (e.g., incidents_7500)
+# or change the export schema, Make automatically regenerates GeoJSON AND
+# downstream PMTiles.
+
+$(PIPELINE_GEOJSON_DIR)/h3_r%.geojsonl.gz: $(PIPELINE_H3_DIR)/h3_incidents_r%.parquet $(PIPELINE_GEOJSON_SQL)
+	@echo "═══ Exporting GeoJSON: resolution $* ═══"
+	@mkdir -p $(PIPELINE_GEOJSON_DIR)
+	$(PIPELINE_CLI) tiles --h3-dir $(PIPELINE_H3_DIR) --output-dir $(PIPELINE_TILES_DIR) --resolutions $*
+	@echo "✓ GeoJSON exported: $@"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PATTERN RULES: PMTILES GENERATION
+# ═══════════════════════════════════════════════════════════════════════════
+# Generates PMTiles (Protomaps tile format) from GeoJSONL using Tippecanoe.
+# PMTiles are served directly to the web map for interactive visualization.
+#
+# Dependencies:
+#   - GeoJSONL file for this resolution
+#   - PMTiles generation Python code (attribute preservation logic)
+#
+# Why this matters: If you change which attributes to preserve in PMTiles
+# (e.g., adding type-specific incident fields to the preserve list), Make
+# knows to regenerate PMTiles.
+
+$(PIPELINE_PMTILES_DIR)/h3_r%.pmtiles: $(PIPELINE_GEOJSON_DIR)/h3_r%.geojsonl.gz $(PIPELINE_PMTILES_PY)
+	@echo "═══ Generating PMTiles: resolution $* ═══"
+	@mkdir -p $(PIPELINE_PMTILES_DIR)
+	$(PIPELINE_CLI) tiles --h3-dir $(PIPELINE_H3_DIR) --output-dir $(PIPELINE_TILES_DIR) --skip-geojson --pmtiles --resolutions $*
+	@echo "✓ PMTiles generated: $@"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# UTILITY TARGETS
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Verify all required tools are installed
+pipeline-check: ## Verify pipeline dependencies (DuckDB, Tippecanoe, etc.)
+	@echo "Checking pipeline dependencies..."
+	@command -v uv >/dev/null 2>&1 || (echo "✗ uv not found. Install: curl -LsSf https://astral.sh/uv/install.sh | sh" && exit 1)
+	@command -v duckdb >/dev/null 2>&1 || (echo "✗ DuckDB not found. Install: brew install duckdb (or see docs)" && exit 1)
+	@command -v tippecanoe >/dev/null 2>&1 || (echo "✗ Tippecanoe not found. Install: brew install tippecanoe (or build from source)" && exit 1)
+	@$(PIPELINE_CLI) --version >/dev/null 2>&1 || (echo "✗ aviation-anomaly CLI not working. Run: uv sync" && exit 1)
+	@echo "✓ All pipeline dependencies installed"
+
+# Remove all generated files (use with caution!)
+# SAFETY: This does NOT delete raw data files (data/raw/*.parquet).
+# Raw data is precious and irreplaceable. Only generated/derived files are deleted.
+pipeline-clean: ## Remove all pipeline-generated files
+	@echo "Removing all pipeline-generated files..."
+	@echo "⚠️  Note: Raw data (data/raw/) is PRESERVED - only derived files deleted"
+	@rm -rf $(PIPELINE_SEGMENTS_DIR)/*.parquet
+	@rm -rf $(PIPELINE_INCIDENTS_DIR)/*.parquet
+	@rm -rf $(PIPELINE_H3_DIR)/*.parquet
+	@rm -rf $(PIPELINE_H3_DAILY_DIR)/*.parquet
+	@rm -rf $(PIPELINE_GEOJSON_DIR)/*.geojsonl.gz
+	@rm -rf $(PIPELINE_PMTILES_DIR)/*.pmtiles
+	@echo "✓ Pipeline clean complete (raw data preserved)"
+
+# Remove only segment files (useful for reprocessing with different thresholds)
+pipeline-clean-segments: ## Remove segments (triggers rebuild of downstream)
+	@echo "Removing segment files..."
+	@rm -rf $(PIPELINE_SEGMENTS_DIR)/*.parquet
+	@echo "✓ Segments removed (will trigger rebuild of incidents, H3, tiles)"
+
+# Remove only incident files (useful for reprocessing with different filters)
+pipeline-clean-incidents: ## Remove incidents (triggers rebuild of H3 and tiles)
+	@echo "Removing incident files..."
+	@rm -rf $(PIPELINE_INCIDENTS_DIR)/*.parquet
+	@echo "✓ Incidents removed (will trigger rebuild of H3, tiles)"
+
+# Remove only H3 aggregations (useful after H3 SQL changes)
+pipeline-clean-h3: ## Remove H3 aggregations (triggers tile rebuild)
+	@echo "Removing H3 aggregations..."
+	@rm -rf $(PIPELINE_H3_DIR)/*.parquet
+	@rm -rf $(PIPELINE_H3_DAILY_DIR)/*.parquet
+	@echo "✓ H3 removed (will trigger rebuild of tiles)"
+
+# Remove only tiles (useful after schema/export changes)
+pipeline-clean-tiles: ## Remove tiles (GeoJSON and PMTiles)
+	@echo "Removing tiles..."
+	@rm -rf $(PIPELINE_GEOJSON_DIR)/*.geojsonl.gz
+	@rm -rf $(PIPELINE_PMTILES_DIR)/*.pmtiles
+	@echo "✓ Tiles removed (GeoJSON and PMTiles)"

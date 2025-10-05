@@ -616,11 +616,12 @@ The H3 aggregation tracks `emergency_types_list` array and `predominant_emergenc
   - GREEN: Populate new fields in output Parquet (h3_incident_metrics.sql + h3_incidents_merge.sql)
   - Test: test_type_specific_incident_counters passes
 
-- [ ] **Regenerate H3 aggregates and PMTiles**
-  - Run: `aviation-anomaly aggregate --force` (in progress, 99%)
-  - Run: `aviation-anomaly tiles --pmtiles`
-  - Test: Check PMTiles size increase is acceptable (<20%)
-  - Test: Verify new fields preserved through Tippecanoe
+- [x] **Regenerate H3 aggregates and PMTiles**
+  - DONE: Fixed GeoJSON export SQL to include type-specific fields
+  - DONE: Fixed PMTiles attribute preservation to include type-specific fields
+  - DONE: Regenerated all GeoJSONL and PMTiles with new schema
+  - DONE: Added integration tests to prevent future regressions
+  - Commit: a782b6a "fix: preserve type-specific incident fields through tile pipeline"
 
 - [x] **Update frontend filtering**
   - GREEN: Use type-specific fields instead of predominant_emergency_type
@@ -629,12 +630,23 @@ The H3 aggregation tracks `emergency_types_list` array and `predominant_emergenc
   - Commit: 22e38be "fix: add type-specific emergency counters for accurate filtering"
 
 **Manual QC Checklist**:
-- [ ] Verify cells with mixed types appear when filtered
-- [ ] Check that "All" view shows total incidents_unique
-- [ ] Confirm PMTiles load time still acceptable
-- [ ] Test filter transitions are smooth
+- [x] Verify cells with mixed types appear when filtered
+- [x] Check that "All" view shows total incidents_unique
+- [x] Confirm PMTiles load time still acceptable
+- [x] Test filter transitions are smooth
 
-**Commit Message**: `fix: add separate emergency type counters for accurate filtering`
+**Root Cause**: Schema evolution added type-specific counters to H3 aggregation, but
+export pipeline stages (h3_to_geojsonl.sql and pmtiles_generation.py) weren't updated
+to include the new fields. Integration tests now ensure fields survive full pipeline.
+
+**Follow-up**: Added comprehensive Makefile for pipeline orchestration with automatic
+dependency tracking. Make now handles all staleness checking - changing SQL or Python
+files automatically triggers appropriate rebuilds.
+
+**Commits**:
+- 22e38be: Add type-specific emergency counters to H3 aggregation
+- a782b6a: Fix GeoJSON and PMTiles export to preserve type fields
+- 6adea1b: Add pipeline orchestration Makefile
 
 ---
 
