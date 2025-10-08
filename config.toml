@@ -18,7 +18,7 @@ debounce_minutes = 15
 # Maximum incident duration in seconds
 max_duration_cap_s = 5400
 # Default filter profile to use (none, production, research, high_security)
-default_profile = "production"
+default_profile = "research"
 
 # Filter Profile: Production (Balanced for operational systems)
 [incidents.profiles.production]

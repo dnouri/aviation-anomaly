@@ -174,16 +174,21 @@ def query_h3_cell_incidents(
     # Build paths to data files
     mapping_file = H3_DATA_DIR / f"incident_h3_mapping_r{resolution}.parquet"
 
-    # Find dated incidents and segments files (exclude test/sample files)
+    # Find dated incidents files (exclude test/sample files)
     incident_files = sorted([f for f in INCIDENTS_DIR.glob("incidents_*.parquet") if DATE_PATTERN.search(f.name)])
-    segment_files = sorted([f for f in SEGMENTS_DIR.glob("segments_*.parquet") if DATE_PATTERN.search(f.name)])
 
-    if not incident_files or not segment_files or not mapping_file.exists():
+    if not incident_files or not mapping_file.exists():
         return {"meta": {"count": 0}, "rows": []}
 
-    # Use the most recent dated incidents and segments files
-    incidents_file = incident_files[-1]
-    segments_file = segment_files[-1]
+    # Query ALL dated incidents files using glob pattern.
+    # H3 aggregation processes incidents from multiple dates, and the incident-to-H3 mapping
+    # references incidents across all date partitions.
+    #
+    # Design: Incident positions (start_lat, start_lon) are stored directly in incidents table,
+    # avoiding segment joins entirely. Segments contain full trajectory arrays (~6K points each)
+    # and appear duplicated across multiple date files (same segment_id in 3-5 files with different
+    # trajectory subsets). Joining and filtering these at query time is expensive.
+    incidents_pattern = str(INCIDENTS_DIR / "incidents_*.parquet")
 
     # Load configuration if not provided
     if config is None:
@@ -200,8 +205,7 @@ def query_h3_cell_incidents(
     sql_path = Path(__file__).parent / "sql" / "h3_cell_incidents.sql"
     params = {
         "mapping_file": str(mapping_file),
-        "incidents_file": str(incidents_file),
-        "segments_file": str(segments_file),
+        "incidents_file": incidents_pattern,
         "h3_cell": h3_cell_int,
         "emergency_type": emergency_type,
         "limit": limit,

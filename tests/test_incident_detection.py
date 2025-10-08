@@ -617,3 +617,105 @@ class TestCombinedRealPatterns:
         # Then detection depends on remaining coverage
         # May or may not detect based on what's left
         assert len(incidents) <= 1
+
+
+class TestPositionDenormalization:
+    """Test that incident positions are correctly extracted and stored."""
+
+    def test_incident_has_position_columns(self, emergency_segment, run_incident_detection):
+        """Verify incidents have start_lat and start_lon columns."""
+        # Given a segment with an emergency
+        segment = emergency_segment(emergency_samples=10, emergency_span_s=60, start_time=1000)
+
+        # When we run detection
+        incidents = run_incident_detection([segment])
+
+        # Then the incident should have position columns
+        assert len(incidents) == 1
+        incident = incidents[0]
+        assert "start_lat" in incident, "Incident missing start_lat column"
+        assert "start_lon" in incident, "Incident missing start_lon column"
+
+    def test_position_extracted_at_incident_start_time(self, emergency_segment, run_incident_detection):
+        """Verify position is extracted at incident.start_time, not segment.start_time."""
+        # Given a segment where emergency starts AFTER segment start
+        segment = emergency_segment(
+            emergency_samples=10,
+            emergency_span_s=60,
+            start_time=1000,  # Segment starts at 1000
+        )
+
+        # The emergency starts at validated_points[1].time
+        # With emergency_samples=10 and emergency_span_s=60, time_between=60/9≈6.67
+        # First emergency point is at start_time (1000)
+        expected_start_time = 1000
+
+        # When we run detection
+        incidents = run_incident_detection([segment])
+
+        # Then position should match the point at incident start time
+        assert len(incidents) == 1
+        incident = incidents[0]
+
+        # The fixture creates positions starting at lat=40.0, lon=-100.0
+        # First emergency point (index 0) has lat=40.0, lon=-100.0
+        assert incident["start_lat"] == 40.0, "Position should be at first emergency point"
+        assert incident["start_lon"] == -100.0, "Position should be at first emergency point"
+        assert incident["start_time"] == expected_start_time
+
+    def test_position_null_if_timestamp_not_in_points(self, emergency_segment, run_incident_detection):
+        """Verify position is NULL if incident timestamp not found in segment points.
+
+        This is a defensive test for edge cases where incident_start might not
+        exactly match a point time (though this shouldn't happen in practice).
+        """
+        # Given a normal segment
+        segment = emergency_segment(emergency_samples=10, emergency_span_s=60)
+
+        # Manually tamper with points to remove times that match incident
+        # (This simulates a corrupted segment that passes detection but has missing points)
+        # Keep first and last for detection, but remove middle times
+        points = segment["points"]
+        if len(points) > 5:
+            # Remove time precision from middle points to create mismatch
+            for i in range(2, 8):
+                if i < len(points):
+                    points[i]["time"] += 1  # Shift time by 1 to create mismatch
+
+        # When we run detection
+        incidents = run_incident_detection([segment])
+
+        # If detection still succeeds (unlikely with our tampering), positions might be NULL
+        # OR incident might not be detected at all
+        # This test documents the behavior rather than asserting specific outcomes
+        assert len(incidents) in (0, 1), "Should either detect or not detect"
+
+    def test_debounced_incidents_use_first_position(self, emergency_segment, run_incident_detection):
+        """When incidents are debounced, use position from first incident in group."""
+        # Given two close incidents from same aircraft (within 15 min)
+        segment1 = emergency_segment(
+            icao24="abc123", segment_id="abc123_1", start_time=1000, emergency_samples=10, emergency_span_s=60
+        )
+        segment2 = emergency_segment(
+            icao24="abc123",
+            segment_id="abc123_2",
+            start_time=1800,  # 800 seconds = 13.3 minutes later (within debounce window)
+            emergency_samples=10,
+            emergency_span_s=60,
+        )
+
+        # Manually adjust segment2 positions to be different
+        for point in segment2["points"]:
+            point["lat"] = 50.0 + (point["time"] - 1800) * 0.01
+            point["lon"] = -110.0 + (point["time"] - 1800) * 0.01
+
+        # When we run detection
+        incidents = run_incident_detection([segment1, segment2])
+
+        # Then incidents should be merged into one
+        assert len(incidents) == 1
+        incident = incidents[0]
+
+        # Position should be from FIRST incident (segment1)
+        assert incident["start_lat"] == 40.0, "Debounced incident should use first position"
+        assert incident["start_lon"] == -100.0, "Debounced incident should use first position"

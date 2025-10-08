@@ -10,7 +10,7 @@
 COPY (
     -- Load segments and extract emergency points (optimized single-pass)
     WITH emergency_segments AS (
-        SELECT 
+        SELECT
             segment_id,
             icao24,
             start_time,
@@ -23,7 +23,10 @@ COPY (
             list_distinct(list_transform(
                 list_filter(points, p -> p.squawk LIKE '77%' AND p.squawk NOT IN ('7700', '7777')),
                 p -> p.squawk
-            )) as roller_dial_codes
+            )) as roller_dial_codes,
+            -- Store full points array for later position extraction
+            -- We'll extract lat/lon after we know the incident start_time
+            points
         FROM '{{ input_path }}'
         -- Early filter: need at least 5 emergency points to possibly pass temporal gate
         WHERE list_count(list_filter(points, p -> p.squawk IN ('7500', '7600', '7700'))) >= 5
@@ -31,7 +34,7 @@ COPY (
     
     -- Categorize emergency points by type (second pass on smaller array)
     categorized_segments AS (
-        SELECT 
+        SELECT
             segment_id,
             icao24,
             start_time,
@@ -43,19 +46,21 @@ COPY (
             list_filter(emergency_points, p -> p.squawk = '7500') as hijack_points,
             list_filter(emergency_points, p -> p.squawk = '7600') as radio_failure_points,
             list_filter(emergency_points, p -> p.squawk = '7700') as general_emergency_points,
-            roller_dial_codes
+            roller_dial_codes,
+            -- Carry points array for position extraction
+            points
         FROM emergency_segments
     ),
     
     -- Apply temporal quality gate: 5+ samples in 60 seconds (optimized)
     temporal_checks AS (
-        SELECT 
+        SELECT
             segment_id,
             icao24,
             emergency_points,
             roller_dial_codes,
             -- Pre-compute temporal checks for each type
-            (list_count(hijack_points) >= 5 
+            (list_count(hijack_points) >= 5
              AND hijack_points[5].time - hijack_points[1].time <= 60) as hijack_valid,
             (list_count(radio_failure_points) >= 5
              AND radio_failure_points[5].time - radio_failure_points[1].time <= 60) as radio_valid,
@@ -63,7 +68,9 @@ COPY (
              AND general_emergency_points[5].time - general_emergency_points[1].time <= 60) as general_valid,
             hijack_points,
             radio_failure_points,
-            general_emergency_points
+            general_emergency_points,
+            -- Carry points for position extraction
+            points
         FROM categorized_segments
     ),
     temporal_validation AS (
@@ -73,24 +80,26 @@ COPY (
             emergency_points,
             roller_dial_codes,
             -- Priority order: hijack > radio > general
-            CASE 
+            CASE
                 WHEN hijack_valid THEN '7500'
                 WHEN radio_valid THEN '7600'
                 WHEN general_valid THEN '7700'
                 ELSE NULL
             END as emergency_type,
-            CASE 
+            CASE
                 WHEN hijack_valid THEN hijack_points
                 WHEN radio_valid THEN radio_failure_points
                 WHEN general_valid THEN general_emergency_points
                 ELSE []
-            END as validated_points
+            END as validated_points,
+            -- Carry points for position extraction
+            points
         FROM temporal_checks
     ),
     
     -- Apply persistence quality gate: >45 seconds
     persistence_validation AS (
-        SELECT 
+        SELECT
             segment_id,
             icao24,
             emergency_type,
@@ -100,11 +109,16 @@ COPY (
             validated_points[1].time as incident_start,
             validated_points[-1].time as incident_end,
             validated_points[-1].time - validated_points[1].time as persistence_seconds,
-            CASE 
+            CASE
                 WHEN validated_points[-1].time - validated_points[1].time > 45
                 THEN true
                 ELSE false
-            END as passes_persistence
+            END as passes_persistence,
+            -- Denormalize position at incident start time for fast API queries
+            -- Extract once during detection rather than joining segments at query time
+            list_filter(points, p -> p.time = validated_points[1].time)[1].lat as start_lat,
+            list_filter(points, p -> p.time = validated_points[1].time)[1].lon as start_lon
+            -- Note: points array dropped here to avoid carrying ~6K-element arrays through remaining CTEs
         FROM temporal_validation
         WHERE emergency_type IS NOT NULL
     ),
@@ -119,7 +133,7 @@ COPY (
             FROM persistence_validation
             WHERE passes_persistence = true
         )
-        SELECT 
+        SELECT
             segment_id,
             icao24,
             emergency_type,
@@ -132,7 +146,10 @@ COPY (
             -- Use pre-computed ground_count
             ROUND(100.0 * ground_count / NULLIF(sample_count, 0), 2) as ground_percentage,
             -- Simple check using computed values
-            (ground_count::FLOAT / NULLIF(sample_count, 0)) < 0.3 as passes_airborne
+            (ground_count::FLOAT / NULLIF(sample_count, 0)) < 0.3 as passes_airborne,
+            -- Carry position coordinates through pipeline
+            start_lat,
+            start_lon
         FROM ground_stats
     ),
     
@@ -169,7 +186,10 @@ COPY (
                 WHEN sample_count >= 5 AND persistence_seconds > 60 AND ground_percentage < 20
                 THEN 'MEDIUM'
                 ELSE 'LOW'
-            END as confidence_level
+            END as confidence_level,
+            -- Carry position coordinates through pipeline
+            start_lat,
+            start_lon
         FROM airborne_validation
         WHERE passes_airborne = true
     ),
@@ -217,6 +237,9 @@ COPY (
             confidence_level,
             CASE WHEN list_count(roller_dial_codes) > 0 THEN true ELSE false END as has_roller_dial,
             roller_dial_codes,
+            -- Position at incident start time (denormalized for performance)
+            start_lat,
+            start_lon,
             -- Add metadata
             CAST('{{ processing_date }}' AS DATE) as processing_date,
             CURRENT_TIMESTAMP as detected_at
@@ -250,6 +273,9 @@ COPY (
             FIRST(confidence_level) as confidence_level,
             BOOL_OR(has_roller_dial) as has_roller_dial,
             FIRST(roller_dial_codes) as roller_dial_codes,  -- Simplified
+            -- Position from earliest incident in group (consistent with FIRST(incident_id))
+            FIRST(start_lat) as start_lat,
+            FIRST(start_lon) as start_lon,
             FIRST(processing_date) as processing_date,
             FIRST(detected_at) as detected_at
         FROM with_groups
@@ -272,6 +298,8 @@ COPY (
         confidence_level,
         has_roller_dial,
         roller_dial_codes,
+        start_lat,
+        start_lon,
         processing_date,
         detected_at
     FROM debounced

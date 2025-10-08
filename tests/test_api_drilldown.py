@@ -280,3 +280,144 @@ def test_query_h3_cell_incidents_includes_adsb_url():
     assert f"timestamp={first_row['start_time']}" in url
     assert f"lat={first_row['start_lat']}" in url
     assert f"lon={first_row['start_lon']}" in url
+
+
+def test_position_extracted_at_incident_start_not_segment_start():
+    """
+    Test that position is extracted at incident start time, not segment start.
+
+    Regression test for bug where positions used segment start (points[1])
+    instead of the point at incident.start_time, causing ADS-B Exchange links
+    to point to incorrect locations (sometimes hundreds of miles away).
+
+    This test also verifies that when segments appear in multiple date files
+    with different trajectory data, the query correctly finds the occurrence
+    containing the incident start timestamp, rather than arbitrarily picking
+    the first occurrence (which may not have that timestamp).
+    """
+    from aviation_anomaly.api import query_h3_cell_incidents
+
+    conn = duckdb.connect()
+
+    # Use data files that exist across multiple dates
+    segments_file = Path("data/segments/segments_2025-07-02.parquet")
+    incidents_file = Path("data/incidents/incidents_2025-07-02.parquet")
+    mapping_file = Path("data/h3/incident_h3_mapping_r5.parquet")
+
+    if not all([segments_file.exists(), incidents_file.exists(), mapping_file.exists()]):
+        pytest.skip("Test data not available")
+
+    # Find an incident where segment start differs significantly from incident start
+    # This catches cases where the incident occurs mid-flight, not at takeoff
+    test_data = conn.execute(f"""
+        WITH incident_sample AS (
+            SELECT i.incident_id, i.segment_id, i.start_time, i.icao24
+            FROM '{incidents_file}' i
+            LIMIT 10
+        ),
+        segment_with_incident AS (
+            SELECT
+                s.segment_id,
+                s.points[1].lat as segment_start_lat,
+                s.points[1].lon as segment_start_lon,
+                i.start_time,
+                s.points
+            FROM '{segments_file}' s
+            JOIN incident_sample i ON s.segment_id = i.segment_id
+        ),
+        segment_with_position AS (
+            SELECT DISTINCT ON (segment_id)
+                segment_id,
+                segment_start_lat,
+                segment_start_lon,
+                list_filter(points, p -> p.time = start_time)[1].lat as incident_start_lat,
+                list_filter(points, p -> p.time = start_time)[1].lon as incident_start_lon
+            FROM segment_with_incident
+        )
+        SELECT
+            i.incident_id,
+            i.start_time,
+            s.segment_start_lat,
+            s.segment_start_lon,
+            s.incident_start_lat,
+            s.incident_start_lon,
+            -- Calculate distance between segment start and incident start
+            ABS(s.segment_start_lat - s.incident_start_lat) +
+            ABS(s.segment_start_lon - s.incident_start_lon) as coord_diff
+        FROM incident_sample i
+        JOIN segment_with_position s ON i.segment_id = s.segment_id
+        WHERE s.incident_start_lat IS NOT NULL
+          AND coord_diff > 0.01  -- Significant difference (>1 degree)
+        LIMIT 1
+    """).fetchone()
+
+    if not test_data:
+        pytest.skip("No incidents found with sufficient position difference")
+
+    (incident_id, start_time, segment_start_lat, segment_start_lon, expected_lat, expected_lon, _) = test_data
+
+    # Verify this segment exists in multiple date files (if available)
+    # This tests the multi-date deduplication behavior
+    icao24_pattern = f"%{incident_id.split('_')[0]}%"
+    multi_date_result = conn.execute(
+        """
+        SELECT COUNT(DISTINCT file) FROM (
+            SELECT 'seg1' as file FROM 'data/segments/segments_2025-07-02.parquet' WHERE segment_id LIKE ?
+            UNION ALL
+            SELECT 'seg2' FROM 'data/segments/segments_2025-07-03.parquet' WHERE segment_id LIKE ?
+            UNION ALL
+            SELECT 'seg3' FROM 'data/segments/segments_2025-07-04.parquet' WHERE segment_id LIKE ?
+        )
+    """,
+        [icao24_pattern] * 3,
+    ).fetchone()
+    multi_date_count = multi_date_result[0] if multi_date_result else 0
+
+    # Find H3 cell for this incident
+    h3_cell_result = conn.execute(f"""
+        SELECT h3_cell
+        FROM '{mapping_file}'
+        WHERE incident_id = '{incident_id}'
+        LIMIT 1
+    """).fetchone()
+
+    if not h3_cell_result:
+        pytest.skip("Incident not in H3 mapping")
+
+    test_h3_cell = str(h3_cell_result[0])
+
+    # Query via API (which uses glob patterns to query all date files)
+    result = query_h3_cell_incidents(conn=conn, h3_cell=test_h3_cell, resolution=5)
+
+    # Find our specific incident in the results
+    target_incident = None
+    for row in result["rows"]:
+        if row["incident_id"] == incident_id:
+            target_incident = row
+            break
+
+    assert target_incident is not None, f"Incident {incident_id} not found in API results"
+
+    # Position should match incident start, NOT segment start
+    actual_lat = target_incident["start_lat"]
+    actual_lon = target_incident["start_lon"]
+
+    # Verify position matches incident start time (within floating point tolerance)
+    assert abs(actual_lat - expected_lat) < 0.0001, (
+        f"Latitude should be at incident start ({expected_lat}), "
+        f"not segment start ({segment_start_lat}). Got {actual_lat}. "
+        f"Segment appears in {multi_date_count} date files."
+    )
+    assert abs(actual_lon - expected_lon) < 0.0001, (
+        f"Longitude should be at incident start ({expected_lon}), "
+        f"not segment start ({segment_start_lon}). Got {actual_lon}. "
+        f"Segment appears in {multi_date_count} date files."
+    )
+
+    # Verify it's NOT the segment start position (the bug we're preventing)
+    segment_diff = abs(actual_lat - segment_start_lat) + abs(actual_lon - segment_start_lon)
+    assert segment_diff > 0.01, (
+        "Position should NOT match segment start "
+        f"(segment: {segment_start_lat}, {segment_start_lon}). "
+        "This would indicate regression to the bug where points[1] was used."
+    )

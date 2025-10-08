@@ -313,7 +313,6 @@ $(PIPELINE_INCIDENTS_DIR)/incidents_%.parquet: $(PIPELINE_SEGMENTS_DIR)/segments
 	$(PIPELINE_CLI) detect --date $* \
 		--segments-dir $(PIPELINE_SEGMENTS_DIR) \
 		--output-dir $(PIPELINE_INCIDENTS_DIR) \
-		--filter-profile production \
 		--stats
 	@echo "✓ Incidents detected: $@"
 
@@ -339,7 +338,7 @@ $(PIPELINE_INCIDENTS_DIR)/incidents_%.parquet: $(PIPELINE_SEGMENTS_DIR)/segments
 $(PIPELINE_H3_DIR)/h3_incidents_r%.parquet: $(PIPELINE_INCIDENT_FILES) $(PIPELINE_SEGMENT_FILES) $(PIPELINE_H3_METRICS_SQL) $(PIPELINE_H3_MERGE_SQL)
 	@echo "═══ H3 aggregation: resolution $* ═══"
 	@mkdir -p $(PIPELINE_H3_DIR)
-	$(PIPELINE_CLI) aggregate --output-dir $(PIPELINE_H3_DIR) --resolutions $*
+	$(PIPELINE_CLI) aggregate --output-dir $(PIPELINE_H3_DIR) --resolutions $* --force
 	@echo "✓ H3 aggregation complete: $@"
 
 # ═══════════════════════════════════════════════════════════════════════════

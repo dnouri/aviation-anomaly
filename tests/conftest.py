@@ -215,8 +215,11 @@ def emergency_segment():
             points.append(
                 {
                     "time": int(start_time + i * time_between),
+                    "lat": 40.0 + i * 0.01,  # Incrementing latitude for realistic position
+                    "lon": -100.0 + i * 0.01,  # Incrementing longitude
                     "squawk": squawk_value,
                     "onground": i < (emergency_samples * ground_ratio),
+                    "alert": i == 0 if squawk_value == emergency_type else False,  # Alert on first emergency
                 }
             )
 
@@ -232,7 +235,18 @@ def emergency_segment():
                 random.seed(142 + j)  # Deterministic seed for normal flight points
                 normal_squawk: str | None = "1200" if random.random() < squawk_coverage else None
                 random.seed()  # Reset
-                points.append({"time": t, "squawk": normal_squawk, "onground": False})
+                # Continue position track
+                pos_index = len(points)
+                points.append(
+                    {
+                        "time": t,
+                        "lat": 40.0 + pos_index * 0.01,
+                        "lon": -100.0 + pos_index * 0.01,
+                        "squawk": normal_squawk,
+                        "onground": False,
+                        "alert": False,
+                    }
+                )
 
         return {
             "segment_id": segment_id,
@@ -258,21 +272,29 @@ def segment_with_roller_dial():
         # Roller dial sequence: pilot scrolling through codes
         for code in ["7701", "7702", "7703", "7700"]:
             for _ in range(5):
+                pos_index = len(points)
                 points.append(
                     {
                         "time": start_time + len(points) * 2,
+                        "lat": 40.0 + pos_index * 0.01,
+                        "lon": -100.0 + pos_index * 0.01,
                         "squawk": code,
                         "onground": False,
+                        "alert": False,
                     }
                 )
 
         # Continue with 7700 for sufficient duration
         for _ in range(30):
+            pos_index = len(points)
             points.append(
                 {
                     "time": start_time + len(points) * 2,
+                    "lat": 40.0 + pos_index * 0.01,
+                    "lon": -100.0 + pos_index * 0.01,
                     "squawk": "7700",
                     "onground": False,
+                    "alert": False,
                 }
             )
 
@@ -296,8 +318,17 @@ def normal_flight_segment():
     def _builder(*, icao24: str = "test", duration_s: int = 3600, start_time: int = 1000) -> dict:
         """Build a normal flight segment without emergencies."""
         points = []
-        for t in range(start_time, start_time + duration_s, 10):
-            points.append({"time": t, "squawk": "1200", "onground": False})
+        for i, t in enumerate(range(start_time, start_time + duration_s, 10)):
+            points.append(
+                {
+                    "time": t,
+                    "lat": 40.0 + i * 0.01,
+                    "lon": -100.0 + i * 0.01,
+                    "squawk": "1200",
+                    "onground": False,
+                    "alert": False,
+                }
+            )
 
         return {
             "segment_id": f"{icao24}_1",
@@ -322,32 +353,62 @@ def segment_with_intermittent_emergency():
             # Default: 3 samples at different times (won't meet 5-in-60 rule)
             bursts = [(1000, 2), (1100, 2), (1200, 1)]
 
-        points = []
+        points: list[dict] = []
         current_time = 1000
 
         for burst_time, burst_count in bursts:
             # Fill with normal flight until burst
             while current_time < burst_time:
-                points.append({"time": current_time, "squawk": "1200", "onground": False})
+                pos_index = len(points)
+                points.append(
+                    {
+                        "time": current_time,
+                        "lat": 40.0 + pos_index * 0.01,
+                        "lon": -100.0 + pos_index * 0.01,
+                        "squawk": "1200",
+                        "onground": False,
+                        "alert": False,
+                    }
+                )
                 current_time += 10
 
             # Add emergency burst
             for i in range(burst_count):
-                points.append({"time": burst_time + i * 2, "squawk": "7700", "onground": False})
+                pos_index = len(points)
+                points.append(
+                    {
+                        "time": burst_time + i * 2,
+                        "lat": 40.0 + pos_index * 0.01,
+                        "lon": -100.0 + pos_index * 0.01,
+                        "squawk": "7700",
+                        "onground": False,
+                        "alert": i == 0,
+                    }
+                )
                 current_time = burst_time + i * 2 + 10
 
         # Fill remaining time
         end_time = current_time + 500
         while current_time < end_time:
-            points.append({"time": current_time, "squawk": "1200", "onground": False})
+            pos_index = len(points)
+            points.append(
+                {
+                    "time": current_time,
+                    "lat": 40.0 + pos_index * 0.01,
+                    "lon": -100.0 + pos_index * 0.01,
+                    "squawk": "1200",
+                    "onground": False,
+                    "alert": False,
+                }
+            )
             current_time += 10
 
         return {
             "segment_id": f"{icao24}_1",
             "icao24": icao24,
-            "start_time": int(points[0]["time"]) if points else 1000,  # type: ignore
-            "end_time": int(points[-1]["time"]) if points else 1500,  # type: ignore
-            "duration_seconds": (int(points[-1]["time"]) - int(points[0]["time"])) if points else 0,  # type: ignore
+            "start_time": int(points[0]["time"]) if points else 1000,
+            "end_time": int(points[-1]["time"]) if points else 1500,
+            "duration_seconds": (int(points[-1]["time"]) - int(points[0]["time"])) if points else 0,
             "point_count": len(points),
             "points": points,
         }
@@ -551,8 +612,11 @@ def run_incident_detection():
                         {s["point_count"]},
                         CAST({points_sql} AS STRUCT(
                             time INTEGER,
+                            lat DOUBLE,
+                            lon DOUBLE,
                             squawk VARCHAR,
-                            onground BOOLEAN
+                            onground BOOLEAN,
+                            alert BOOLEAN
                         )[])
                     )"""
                 )
