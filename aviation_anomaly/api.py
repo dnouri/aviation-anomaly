@@ -1,7 +1,9 @@
 """Drill-down API for incident details."""
 
 import csv
+import datetime
 import io
+import re
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,42 @@ from aviation_anomaly.data_access import create_configured_connection
 # Data directories
 H3_DATA_DIR = Path("data/h3")
 INCIDENTS_DIR = Path("data/incidents")
+SEGMENTS_DIR = Path("data/segments")
+
+# Date pattern for excluding test/sample files
+DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}\.parquet$")
+
+
+def build_adsb_exchange_url(
+    icao24: str,
+    timestamp: int,
+    lat: float,
+    lon: float,
+    zoom: int = 10,
+) -> str:
+    """
+    Build ADS-B Exchange URL for flight replay.
+
+    Args:
+        icao24: Aircraft ICAO24 hex identifier
+        timestamp: Unix timestamp of incident start
+        lat: Latitude coordinate
+        lon: Longitude coordinate
+        zoom: Map zoom level (default: 10)
+
+    Returns:
+        Full URL to ADS-B Exchange with flight replay parameters
+    """
+    date_str = datetime.datetime.fromtimestamp(timestamp, tz=datetime.UTC).strftime("%Y-%m-%d")
+    return (
+        f"https://globe.adsbexchange.com/"
+        f"?icao={icao24}"
+        f"&showTrace={date_str}"
+        f"&timestamp={timestamp}"
+        f"&lat={lat}"
+        f"&lon={lon}"
+        f"&zoom={zoom}"
+    )
 
 
 def query_h3_cell_summary(
@@ -136,13 +174,16 @@ def query_h3_cell_incidents(
     # Build paths to data files
     mapping_file = H3_DATA_DIR / f"incident_h3_mapping_r{resolution}.parquet"
 
-    # Find appropriate incidents file (look for most recent)
-    incident_files = sorted(INCIDENTS_DIR.glob("incidents_*.parquet"))
-    if not incident_files or not mapping_file.exists():
+    # Find dated incidents and segments files (exclude test/sample files)
+    incident_files = sorted([f for f in INCIDENTS_DIR.glob("incidents_*.parquet") if DATE_PATTERN.search(f.name)])
+    segment_files = sorted([f for f in SEGMENTS_DIR.glob("segments_*.parquet") if DATE_PATTERN.search(f.name)])
+
+    if not incident_files or not segment_files or not mapping_file.exists():
         return {"meta": {"count": 0}, "rows": []}
 
-    # Use the most recent incidents file
+    # Use the most recent dated incidents and segments files
     incidents_file = incident_files[-1]
+    segments_file = segment_files[-1]
 
     # Load configuration if not provided
     if config is None:
@@ -160,6 +201,7 @@ def query_h3_cell_incidents(
     params = {
         "mapping_file": str(mapping_file),
         "incidents_file": str(incidents_file),
+        "segments_file": str(segments_file),
         "h3_cell": h3_cell_int,
         "emergency_type": emergency_type,
         "limit": limit,
@@ -182,6 +224,14 @@ def query_h3_cell_incidents(
                     "icao24": row[4],
                     "confidence_score": row[5],
                     "duration_seconds": row[6],
+                    "start_lat": row[7],
+                    "start_lon": row[8],
+                    "adsb_exchange_url": build_adsb_exchange_url(
+                        icao24=row[4],
+                        timestamp=row[1],
+                        lat=row[7],
+                        lon=row[8],
+                    ),
                 }
             )
 

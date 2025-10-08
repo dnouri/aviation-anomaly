@@ -72,12 +72,74 @@
             border-radius: 4px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.2);
             z-index: 1;
-            max-width: 300px;
+            max-width: 600px;
+            max-height: calc(100vh - 100px);
+            overflow-y: auto;
             display: none;
         }
-        
+
         #incident-details.visible {
             display: block;
+        }
+
+        .incident-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            font-size: 12px;
+        }
+
+        .incident-table th {
+            background: #f5f5f5;
+            padding: 8px;
+            text-align: left;
+            border-bottom: 2px solid #ddd;
+        }
+
+        .incident-table td {
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .incident-table tr:hover {
+            background: #f9f9f9;
+        }
+
+        .replay-button {
+            display: inline-block;
+            padding: 4px 8px;
+            background: #0066cc;
+            color: white;
+            text-decoration: none;
+            border-radius: 3px;
+            font-size: 11px;
+        }
+
+        .replay-button:hover {
+            background: #0052a3;
+        }
+
+        .emergency-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+            font-size: 11px;
+        }
+
+        .emergency-7500 {
+            background: #ff4444;
+            color: white;
+        }
+
+        .emergency-7600 {
+            background: #ff9944;
+            color: white;
+        }
+
+        .emergency-7700 {
+            background: #ffcc44;
+            color: #333;
         }
         
         .filter-controls {
@@ -369,11 +431,6 @@
             // Hover effect
             map.on('mousemove', 'h3-cells', (e) => {
                 map.getCanvas().style.cursor = 'pointer';
-                
-                if (e.features.length > 0) {
-                    const props = e.features[0].properties;
-                    console.log('Hover:', props);
-                }
             });
             
             map.on('mouseleave', 'h3-cells', () => {
@@ -381,37 +438,91 @@
             });
             
             // Click handler for cells
-            map.on('click', 'h3-cells', (e) => {
+            map.on('click', 'h3-cells', async (e) => {
                 if (e.features.length > 0) {
                     const props = e.features[0].properties;
                     const details = document.getElementById('incident-details');
                     const content = document.getElementById('details-content');
 
-                    let rateDisplay = 'N/A';
-                    if (displayMode === 'normalized' && props.incident_rate) {
-                        const ppm = props.incident_rate * 1000000;
-                        rateDisplay = `${ppm.toFixed(0)} PPM`;
-                    }
-
-                    if (displayMode === 'absolute') {
-                        content.innerHTML = `
-                            <p><strong>H3 Cell:</strong> ${props.h3_cell || 'N/A'}</p>
-                            <p><strong>Incidents:</strong> ${props.incidents_unique || 0}</p>
-                            <p><strong>Segments:</strong> ${props.unique_segments || 0}</p>
-                            <p><strong>Coverage:</strong> ${props.incidents_coverage || 0} observations</p>
-                            <p><strong>Resolution:</strong> ${currentResolution}</p>
-                        `;
-                    } else {
-                        content.innerHTML = `
-                            <p><strong>H3 Cell:</strong> ${props.h3_cell || 'N/A'}</p>
-                            <p><strong>Rate:</strong> ${rateDisplay}</p>
-                            <p><strong>Incidents:</strong> ${props.incidents_unique || 0}</p>
-                            <p><strong>Segments:</strong> ${props.unique_segments || 0}</p>
-                            <p><strong>Resolution:</strong> ${currentResolution}</p>
-                        `;
-                    }
-
+                    // Show loading state
+                    content.innerHTML = '<p>Loading incident details...</p>';
                     details.classList.add('visible');
+
+                    try {
+                        // Fetch incident details from API
+                        const response = await fetch(
+                            `/api/h3/incidents?h3_cell=${props.h3_cell}&resolution=${currentResolution}`
+                        );
+                        const data = await response.json();
+
+                        // Build summary section
+                        let rateDisplay = 'N/A';
+                        if (displayMode === 'normalized' && props.incident_rate) {
+                            const ppm = props.incident_rate * 1000000;
+                            rateDisplay = `${ppm.toFixed(0)} PPM`;
+                        }
+
+                        let summaryHTML = '<div style="margin-bottom: 15px; padding-bottom: 10px; border-bottom: 2px solid #ddd;">';
+                        if (displayMode === 'absolute') {
+                            summaryHTML += `
+                                <p><strong>H3 Cell:</strong> ${props.h3_cell || 'N/A'}</p>
+                                <p><strong>Incidents:</strong> ${props.incidents_unique || 0}</p>
+                                <p><strong>Segments:</strong> ${props.unique_segments || 0}</p>
+                                <p><strong>Coverage:</strong> ${props.incidents_coverage || 0} observations</p>
+                                <p><strong>Resolution:</strong> ${currentResolution}</p>
+                            `;
+                        } else {
+                            summaryHTML += `
+                                <p><strong>H3 Cell:</strong> ${props.h3_cell || 'N/A'}</p>
+                                <p><strong>Rate:</strong> ${rateDisplay}</p>
+                                <p><strong>Incidents:</strong> ${props.incidents_unique || 0}</p>
+                                <p><strong>Segments:</strong> ${props.unique_segments || 0}</p>
+                                <p><strong>Resolution:</strong> ${currentResolution}</p>
+                            `;
+                        }
+                        summaryHTML += '</div>';
+
+                        // Build incident list table
+                        let incidentsHTML = '';
+                        if (data.meta.count > 0) {
+                            incidentsHTML = '<h5 style="margin: 10px 0;">Incident Details</h5>';
+                            incidentsHTML += '<table class="incident-table">';
+                            incidentsHTML += '<thead><tr>';
+                            incidentsHTML += '<th>Time</th>';
+                            incidentsHTML += '<th>Type</th>';
+                            incidentsHTML += '<th>Aircraft</th>';
+                            incidentsHTML += '<th>Confidence</th>';
+                            incidentsHTML += '<th>Action</th>';
+                            incidentsHTML += '</tr></thead><tbody>';
+
+                            data.rows.forEach(incident => {
+                                const date = new Date(incident.start_time * 1000);
+                                const timeStr = date.toLocaleString('en-US', {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit'
+                                });
+
+                                incidentsHTML += '<tr>';
+                                incidentsHTML += `<td>${timeStr}</td>`;
+                                incidentsHTML += `<td><span class="emergency-badge emergency-${incident.emergency_type}">${incident.emergency_type}</span></td>`;
+                                incidentsHTML += `<td>${incident.icao24}</td>`;
+                                incidentsHTML += `<td>${incident.confidence_score}%</td>`;
+                                incidentsHTML += `<td><a href="${incident.adsb_exchange_url}" target="_blank" class="replay-button">View Replay</a></td>`;
+                                incidentsHTML += '</tr>';
+                            });
+
+                            incidentsHTML += '</tbody></table>';
+                        } else {
+                            incidentsHTML = '<p><em>No incident details available</em></p>';
+                        }
+
+                        content.innerHTML = summaryHTML + incidentsHTML;
+                    } catch (error) {
+                        console.error('Error fetching incident details:', error);
+                        content.innerHTML = '<p style="color: red;">Error loading incident details</p>';
+                    }
                 }
             });
             
