@@ -112,16 +112,24 @@ Deploy the aviation anomaly tracker as a production web application on the exist
   - Fixed config.toml temp_directory for container portability: `/tmp/duckdb` instead of dev path
   - Verified: Image builds successfully with all data files included
 
-- [ ] **Test container runs and serves application** _(Deferred to server deployment)_
-  - Health endpoint tested locally outside container and works correctly
-  - Will verify full container operation during server deployment (Phase 6)
+- [x] **Test container runs and serves application**
+  - Ran container: `podman run -d --name test-aviation -p 8002:8000 aviation-anomaly:test`
+  - Container started successfully and remained running
+  - Uvicorn started on port 8000 inside container
+  - Verified: Application accessible from inside container
 
-- [ ] **Test container health check** _(Deferred to server deployment)_
-  - HEALTHCHECK configured in Containerfile (30s interval, /health endpoint)
-  - Will verify during production deployment
+- [x] **Test container health check**
+  - HEALTHCHECK status: **healthy** (`podman inspect` confirms)
+  - Health endpoint returns: `{"status": "healthy", "checks": {"duckdb": "ok", "data_files": "ok (7953 cells)"}}`
+  - Config.toml loaded correctly (would fail health check otherwise)
+  - DuckDB connection and data file access verified
 
-- [ ] **Test API endpoints in container** _(Deferred to server deployment)_
-  - Will test full API functionality once deployed to server
+- [x] **Test API endpoints in container**
+  - Tested H3 summary endpoint: Returns real data from Parquet files
+  - Tested with cell 589971894782918655: Correct JSON response with h3_res, incidents, segments
+  - Tested 404 behavior: Proper error JSON for invalid cells
+  - Static HTML: Aviation Anomaly Tracker interface loads correctly
+  - Verified: All endpoints functional
 
 ---
 
