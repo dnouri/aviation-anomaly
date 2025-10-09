@@ -62,6 +62,88 @@
             margin-right: 8px;
             border: 1px solid #ccc;
         }
+
+        .legend-footer {
+            margin-top: 12px;
+            padding-top: 10px;
+            border-top: 1px solid #e0e0e0;
+            font-size: 11px;
+            color: #666;
+        }
+
+        .legend-footer a {
+            position: relative;
+            color: #0066cc;
+            text-decoration: underline;
+        }
+
+        .legend-footer a:hover {
+            color: #0052a3;
+        }
+
+        /* Tooltip bubble */
+        .legend-footer a::after {
+            content: attr(data-tooltip);
+
+            /* Positioning */
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            margin-bottom: 8px;
+
+            /* Box styling */
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            font-size: 11px;
+            line-height: 1.4;
+            border-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+
+            /* Text handling */
+            white-space: normal;
+            max-width: 220px;
+            text-align: center;
+
+            /* Visibility control */
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease-in-out;
+
+            /* Layering */
+            z-index: 1000;
+        }
+
+        /* Tooltip arrow */
+        .legend-footer a::before {
+            content: '';
+
+            /* Positioning */
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            margin-bottom: 0px;
+
+            /* Arrow shape */
+            border: 6px solid transparent;
+            border-top-color: rgba(0, 0, 0, 0.9);
+
+            /* Visibility control */
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease-in-out;
+
+            /* Layering */
+            z-index: 1001;
+        }
+
+        /* Show tooltip on hover */
+        .legend-footer a:hover::after,
+        .legend-footer a:hover::before {
+            opacity: 1;
+        }
         
         #incident-details {
             position: absolute;
@@ -298,6 +380,13 @@
                 <span class="legend-label">10+</span>
             </div>
         </div>
+        <div class="legend-footer">
+            Data: <a href="https://opensky-network.org/"
+                     target="_blank"
+                     rel="noopener"
+                     aria-label="OpenSky Network - Crowdsourced ADS-B data for non-profit research"
+                     data-tooltip="Crowdsourced ADS-B data for non-profit research - click to learn more">OpenSky Network</a>
+        </div>
     </div>
     
     <div id="incident-details">
@@ -352,7 +441,8 @@
                 }]
             },
             center: [-98, 39],  // Center on USA
-            zoom: 5  // Start at zoom level where tiles are available
+            zoom: 5,  // Start at zoom level where tiles are available
+            attributionControl: false  // Disable default to add custom compact control
         });
         
         // Make map accessible for tests

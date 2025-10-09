@@ -358,3 +358,12 @@ The deployment creates:
 The [OpenSky Report 2020](https://www.cs.ox.ac.uk/files/12039/OpenSky%20Report%202020.pdf) analyzed global aircraft emergencies from ADS-B data, finding that raw squawk codes (7700/7600/7500) include many false positives from short bursts, code transitions, and ground vehicles. Regional ATC practices and receiver coverage strongly shape observed hotspots. The study applied strict filters and masking to isolate real cases.
 
 **Implication:** Emergency squawk analysis requires robust quality gates to separate signal from noise. Maps reflect both technical artifacts and procedural differences, not just true emergencies. This tool implements those quality gates and clearly communicates coverage limitations.
+
+## Acknowledgments
+
+This project uses historical ADS-B data from the [OpenSky Network](https://opensky-network.org/), a crowdsourced air traffic monitoring network.
+
+**Citation:**
+Schäfer, M., Strohmeier, M., Lenders, V., Martinovic, I., & Wilhelm, M. (2014). Bringing up OpenSky: A large-scale ADS-B sensor network for research. In *Proceedings of the 13th IEEE/ACM International Symposium on Information Processing in Sensor Networks (IPSN)*, pp. 83-94. [https://ieeexplore.ieee.org/document/6846743](https://ieeexplore.ieee.org/document/6846743)
+
+We are grateful to OpenSky Network and its volunteer contributors for making this research possible.
