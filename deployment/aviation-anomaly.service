@@ -1,0 +1,36 @@
+[Unit]
+Description=Aviation Anomaly Tracker - Emergency Incident Analysis Web Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10s
+TimeoutStartSec=60s
+TimeoutStopSec=30s
+
+# Remove existing container if present (handles upgrades)
+ExecStartPre=-/usr/bin/podman stop aviation-anomaly
+ExecStartPre=-/usr/bin/podman rm aviation-anomaly
+
+# Start container
+# - Uses :production tag (updated by deployment)
+# - Port 8000 internal, exposed to localhost only
+# - Named container for easy management
+# - Pulls health check configuration from Containerfile
+ExecStart=/usr/bin/podman run \
+    --name aviation-anomaly \
+    --rm \
+    -p 127.0.0.1:8000:8000 \
+    localhost/aviation-anomaly:production
+
+# Stop container gracefully
+ExecStop=/usr/bin/podman stop -t 10 aviation-anomaly
+
+# Automatically restart on failure
+# Container health checks will cause restart if unhealthy
+RestartForceExitStatus=0
+
+[Install]
+WantedBy=default.target

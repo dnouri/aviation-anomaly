@@ -313,6 +313,35 @@ aviation_anomaly/
 
 Memory-safe design: Pure SQL pipelines via DuckDB, no Pandas DataFrames, atomic writes with crash safety, per-day processing with merge for constrained environments. See [SPEC.md](SPEC.md) §4 for detailed pipeline architecture.
 
+## Production Deployment
+
+Deploy the application as a containerized web service with automatic HTTPS:
+
+```bash
+# Build and deploy to production server
+make deploy
+
+# Check deployment status
+make deploy-status
+
+# View container logs
+make deploy-logs
+```
+
+The deployment creates:
+- **Immutable container** (1.1GB) with application code and data baked in
+- **Rootless Podman** runtime with systemd user service for automatic restart
+- **Git-based versioning** using `${GIT_SHA}-${TIMESTAMP}` tags for rollback capability
+- **Health checks** at container and application level (`/health` endpoint)
+
+**Server requirements:**
+- Podman 3.4+ for rootless container support
+- Systemd with user session (lingering enabled)
+- SSH access configured in Makefile (`DEPLOY_SERVER` variable)
+- Reverse proxy (e.g., Caddy) for HTTPS termination (not managed by deployment automation)
+
+**Update workflow:** Change code/data → commit → `make deploy` → automatic build, upload, and zero-downtime restart.
+
 ## Documentation
 
 - **[SPEC.md](SPEC.md)** — Complete technical specification

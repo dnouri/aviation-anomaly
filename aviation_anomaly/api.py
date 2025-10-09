@@ -9,6 +9,7 @@ from typing import Any
 
 import duckdb
 from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from qck import qck
 
@@ -95,7 +96,7 @@ def query_h3_cell_summary(
 
     # Load configuration if not provided
     if config is None:
-        config = Config()
+        config = Config.from_file("config.toml")
 
     # Use provided connection or create a configured one
     if conn is None:
@@ -192,7 +193,7 @@ def query_h3_cell_incidents(
 
     # Load configuration if not provided
     if config is None:
-        config = Config()
+        config = Config.from_file("config.toml")
 
     # Use provided connection or create a configured one
     if conn is None:
@@ -324,9 +325,64 @@ def create_app() -> FastAPI:
     )
 
     @app.get("/health")
-    def health_check() -> dict[str, str]:
-        """Simple health check endpoint."""
-        return {"status": "ok"}
+    def health_check() -> Response:
+        """
+        Health check endpoint with actual verification.
+
+        Verifies:
+        - DuckDB connection works
+        - Critical data files are accessible
+
+        Returns:
+            200 OK if healthy
+            503 Service Unavailable if unhealthy
+        """
+        checks = {}
+        all_healthy = True
+
+        # Load configuration
+        try:
+            config = Config.from_file("config.toml")
+        except Exception as e:
+            return JSONResponse(
+                content={"status": "unhealthy", "checks": {"config": f"error: {str(e)}"}},
+                status_code=503,
+            )
+
+        # Check DuckDB connection
+        try:
+            conn = create_configured_connection(config)
+            conn.execute("SELECT 1").fetchone()
+            checks["duckdb"] = "ok"
+        except Exception as e:
+            checks["duckdb"] = f"error: {str(e)}"
+            all_healthy = False
+
+        # Check critical data file exists and is queryable
+        h3_file = H3_DATA_DIR / "h3_incidents_r3.parquet"
+        try:
+            if not h3_file.exists():
+                checks["data_files"] = f"error: {h3_file} not found"
+                all_healthy = False
+            else:
+                # Actually query the file to ensure it's readable
+                conn = create_configured_connection(config)
+                result = conn.execute(f"SELECT COUNT(*) FROM '{h3_file}'").fetchone()
+                checks["data_files"] = f"ok ({result[0]} cells)" if result else "ok"
+        except Exception as e:
+            checks["data_files"] = f"error: {str(e)}"
+            all_healthy = False
+
+        status_code = 200 if all_healthy else 503
+        response_body = {
+            "status": "healthy" if all_healthy else "unhealthy",
+            "checks": checks,
+        }
+
+        return JSONResponse(
+            content=response_body,
+            status_code=status_code,
+        )
 
     @app.get("/api/h3/summary")
     def get_h3_summary(
@@ -395,3 +451,7 @@ def create_app() -> FastAPI:
         app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
 
     return app
+
+
+# Create application instance at module level for uvicorn
+app = create_app()

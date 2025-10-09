@@ -78,7 +78,7 @@ good_coverage_min_points = 4
 memory_limit = "8GB"
 # Number of threads for parallel processing
 threads = 2
-# Temporary directory for disk spilling
-temp_directory = "/home/daniel/scratch/aviation-anomaly/tmp_duckdb"
+# Temporary directory for disk spilling (portable path for container compatibility)
+temp_directory = "/tmp/duckdb"
 # Maximum size for temporary files
 max_temp_directory_size = "150GB"
