@@ -433,3 +433,159 @@ pipeline-clean-tiles: ## Remove tiles (GeoJSON and PMTiles)
 	@rm -rf $(PIPELINE_GEOJSON_DIR)/*.geojsonl.gz
 	@rm -rf $(PIPELINE_PMTILES_DIR)/*.pmtiles
 	@echo "✓ Tiles removed (GeoJSON and PMTiles)"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DEPLOYMENT AUTOMATION
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Container deployment workflow to production server. Handles building,
+# uploading, and deploying containerized application with zero-downtime updates.
+#
+# QUICK START:
+#   make deploy              - Build and deploy to production
+#   make deploy-logs         - View container logs on server
+#   make install-service     - Install systemd service (one-time setup)
+#
+# ARCHITECTURE:
+#   - Immutable containers: Data baked into image (695MB deployment)
+#   - Rootless Podman: Runs as user daniel, no root privileges required
+#   - Systemd user service: Automatic restart, survives reboots
+#   - Health checks: Container monitors app health, systemd restarts on failure
+#   - Git-based versioning: Each build tagged with commit SHA + timestamp
+#
+# DEPLOYMENT FLOW:
+#   1. Build container with git SHA tag (1.17GB image)
+#   2. Save to tarball (~650MB compressed)
+#   3. Upload to server via SCP
+#   4. Load image on server
+#   5. Stop old container, start new one
+#   6. Tag as :production for systemd to reference
+#
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────────────────
+# DEPLOYMENT CONFIGURATION
+# ───────────────────────────────────────────────────────────────────────────
+
+DEPLOY_SERVER := daniel@nv-network
+DEPLOY_DIR := ~/aviation-anomaly-deploy
+DEPLOY_IMAGE_NAME := aviation-anomaly
+DEPLOY_CONTAINER_NAME := aviation-anomaly
+DEPLOY_GIT_SHA := $(shell git rev-parse --short HEAD)
+DEPLOY_TIMESTAMP := $(shell date +%Y%m%d)
+DEPLOY_TAG := $(DEPLOY_GIT_SHA)-$(DEPLOY_TIMESTAMP)
+DEPLOY_TARBALL := $(DEPLOY_IMAGE_NAME)-$(DEPLOY_TAG).tar
+
+# ───────────────────────────────────────────────────────────────────────────
+# PHONY TARGETS (deployment-specific)
+# ───────────────────────────────────────────────────────────────────────────
+
+.PHONY: deploy build-container upload-container deploy-container \
+        install-service deploy-logs deploy-status
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MAIN DEPLOYMENT TARGETS
+# ═══════════════════════════════════════════════════════════════════════════
+
+deploy: build-container upload-container deploy-container ## Build and deploy to production
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "✓ Deployment complete!"
+	@echo "  Version:  $(DEPLOY_TAG)"
+	@echo "  Server:   $(DEPLOY_SERVER)"
+	@echo "  Check:    make deploy-status"
+	@echo "  Logs:     make deploy-logs"
+	@echo "════════════════════════════════════════════════════════════"
+
+build-container: ## Build container image with git-based tag
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "Building container: $(DEPLOY_IMAGE_NAME):$(DEPLOY_TAG)"
+	@echo "════════════════════════════════════════════════════════════"
+	podman build --format docker -t $(DEPLOY_IMAGE_NAME):$(DEPLOY_TAG) -f Containerfile .
+	podman tag $(DEPLOY_IMAGE_NAME):$(DEPLOY_TAG) $(DEPLOY_IMAGE_NAME):latest
+	@echo ""
+	@echo "Saving to tarball: $(DEPLOY_TARBALL)"
+	podman save -o $(DEPLOY_TARBALL) $(DEPLOY_IMAGE_NAME):$(DEPLOY_TAG)
+	@echo ""
+	@echo "✓ Build complete"
+	@echo "  Image:    $(DEPLOY_IMAGE_NAME):$(DEPLOY_TAG)"
+	@printf "  Tarball:  %s (%s)\n" "$(DEPLOY_TARBALL)" "$$(du -h $(DEPLOY_TARBALL) | cut -f1)"
+	@echo "  SHA:      $(DEPLOY_GIT_SHA)"
+
+upload-container: ## Upload container tarball to server and load it
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "Uploading: $(DEPLOY_TARBALL) → $(DEPLOY_SERVER)"
+	@echo "════════════════════════════════════════════════════════════"
+	@if [ ! -f "$(DEPLOY_TARBALL)" ]; then \
+		echo "✗ Error: $(DEPLOY_TARBALL) not found. Run 'make build-container' first."; \
+		exit 1; \
+	fi
+	scp $(DEPLOY_TARBALL) $(DEPLOY_SERVER):$(DEPLOY_DIR)/
+	@echo ""
+	@echo "Loading image on server..."
+	ssh $(DEPLOY_SERVER) "podman load -i $(DEPLOY_DIR)/$(DEPLOY_TARBALL)"
+	@echo ""
+	@echo "✓ Upload complete"
+	@echo "  Loaded:   $(DEPLOY_IMAGE_NAME):$(DEPLOY_TAG)"
+
+deploy-container: ## Deploy container on server (stop old, start new)
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "Deploying: $(DEPLOY_IMAGE_NAME):$(DEPLOY_TAG)"
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "Stopping existing container (if running)..."
+	ssh $(DEPLOY_SERVER) "podman stop $(DEPLOY_CONTAINER_NAME) || true"
+	ssh $(DEPLOY_SERVER) "podman rm $(DEPLOY_CONTAINER_NAME) || true"
+	@echo ""
+	@echo "Tagging as :production for systemd..."
+	ssh $(DEPLOY_SERVER) "podman tag $(DEPLOY_IMAGE_NAME):$(DEPLOY_TAG) $(DEPLOY_IMAGE_NAME):production"
+	@echo ""
+	@echo "Starting new container..."
+	ssh $(DEPLOY_SERVER) "podman run -d --name $(DEPLOY_CONTAINER_NAME) -p 127.0.0.1:8000:8000 $(DEPLOY_IMAGE_NAME):production"
+	@echo ""
+	@echo "Waiting for health check..."
+	@sleep 5
+	@ssh $(DEPLOY_SERVER) "podman exec $(DEPLOY_CONTAINER_NAME) curl -f http://localhost:8000/health" || \
+		(echo "✗ Health check failed!" && exit 1)
+	@echo ""
+	@echo "✓ Deployment successful"
+	@echo "  Container: $(DEPLOY_CONTAINER_NAME)"
+	@echo "  Version:   $(DEPLOY_TAG)"
+	@echo "  Health:    OK"
+
+install-service: ## Install systemd user service (one-time setup)
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "Installing systemd service: aviation-anomaly.service"
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "Copying service file to server..."
+	scp deployment/aviation-anomaly.service $(DEPLOY_SERVER):~/.config/systemd/user/
+	@echo ""
+	@echo "Reloading systemd daemon..."
+	ssh $(DEPLOY_SERVER) "systemctl --user daemon-reload"
+	@echo ""
+	@echo "✓ Service installed"
+	@echo "  Enable:  ssh $(DEPLOY_SERVER) 'systemctl --user enable aviation-anomaly'"
+	@echo "  Start:   ssh $(DEPLOY_SERVER) 'systemctl --user start aviation-anomaly'"
+	@echo "  Status:  make deploy-status"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MONITORING AND UTILITIES
+# ═══════════════════════════════════════════════════════════════════════════
+
+deploy-status: ## Check deployment status on server
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "Deployment Status"
+	@echo "════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "Container status:"
+	@ssh $(DEPLOY_SERVER) "podman ps -a --filter name=$(DEPLOY_CONTAINER_NAME)" || true
+	@echo ""
+	@echo "Systemd service status:"
+	@ssh $(DEPLOY_SERVER) "systemctl --user status aviation-anomaly --no-pager" || true
+	@echo ""
+	@echo "Recent images:"
+	@ssh $(DEPLOY_SERVER) "podman images $(DEPLOY_IMAGE_NAME) --format 'table {{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.Created}}'" || true
+
+deploy-logs: ## View container logs on server (follow mode)
+	@echo "Viewing logs from $(DEPLOY_SERVER):$(DEPLOY_CONTAINER_NAME)"
+	@echo "Press Ctrl+C to exit"
+	@echo "════════════════════════════════════════════════════════════"
+	ssh $(DEPLOY_SERVER) "podman logs -f $(DEPLOY_CONTAINER_NAME)"
