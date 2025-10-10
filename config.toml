@@ -2,6 +2,10 @@
 # This file contains business logic configuration only.
 # Authentication is handled via environment variables or prompts.
 
+# Base directory for all data files (default: "data")
+# All subdirectories (raw, segments, incidents, h3, tiles) are created under this path
+data_dir = "data"
+
 [segments]
 # Minutes of gap to split flight segments
 gap_minutes = 20

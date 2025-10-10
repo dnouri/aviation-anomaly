@@ -547,7 +547,10 @@ def h3_test_data(tmp_path: Path, monkeypatch) -> Path:
     conn = duckdb.connect()
     conn.execute("INSTALL h3 FROM community; LOAD h3")
 
-    h3_file = tmp_path / "h3_incidents_r4.parquet"
+    # Create h3 subdirectory to match expected structure
+    h3_dir = tmp_path / "h3"
+    h3_dir.mkdir(parents=True, exist_ok=True)
+    h3_file = h3_dir / "h3_incidents_r4.parquet"
 
     # Create test data with known values
     conn.execute(f"""
@@ -570,11 +573,6 @@ def h3_test_data(tmp_path: Path, monkeypatch) -> Path:
     """)
 
     conn.close()
-
-    # Monkey-patch the API to use our test directory
-    import aviation_anomaly.api
-
-    monkeypatch.setattr(aviation_anomaly.api, "H3_DATA_DIR", tmp_path)
 
     return h3_file
 

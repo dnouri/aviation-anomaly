@@ -32,24 +32,54 @@ def test_app_has_expected_routes():
     assert "/docs" in routes
 
 
-def test_health_endpoint():
+def test_health_endpoint(tmp_path):
     """Health check endpoint should return OK."""
     from aviation_anomaly.api import create_app
+    from aviation_anomaly.config import Config
 
-    app = create_app()
+    # Create test config with tmp_path as data_dir
+    test_config = Config()
+    test_config.data_dir = tmp_path
+
+    # Create dummy H3 file for health check
+    h3_dir = tmp_path / "h3"
+    h3_dir.mkdir(parents=True, exist_ok=True)
+    h3_file = h3_dir / "h3_incidents_r3.parquet"
+
+    # Create a minimal valid parquet file
+    import duckdb
+
+    conn = duckdb.connect()
+    conn.execute(f"""
+        COPY (
+            SELECT
+                123456789::UBIGINT as h3_cell,
+                3 as h3_res
+        ) TO '{h3_file}' (FORMAT PARQUET)
+    """)
+    conn.close()
+
+    app = create_app(test_config)
     client = TestClient(app)
 
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    response_json = response.json()
+    assert response_json["status"] == "healthy"
+    assert "checks" in response_json
 
 
-def test_h3_summary_endpoint_validation():
+def test_h3_summary_endpoint_validation(tmp_path):
     """H3 summary endpoint should validate parameters."""
     from aviation_anomaly.api import create_app
+    from aviation_anomaly.config import Config
 
-    app = create_app()
+    # Create test config with tmp_path as data_dir
+    test_config = Config()
+    test_config.data_dir = tmp_path
+
+    app = create_app(test_config)
     client = TestClient(app)
 
     # Missing required parameter
@@ -61,11 +91,16 @@ def test_h3_summary_endpoint_validation():
     assert response.status_code == 422
 
 
-def test_h3_incidents_endpoint_returns_data():
+def test_h3_incidents_endpoint_returns_data(tmp_path):
     """H3 incidents endpoint should return expected format."""
     from aviation_anomaly.api import create_app
+    from aviation_anomaly.config import Config
 
-    app = create_app()
+    # Create test config with tmp_path as data_dir
+    test_config = Config()
+    test_config.data_dir = tmp_path
+
+    app = create_app(test_config)
     client = TestClient(app)
 
     # Valid request (will return empty if no data)
@@ -78,11 +113,16 @@ def test_h3_incidents_endpoint_returns_data():
     assert isinstance(data["rows"], list)
 
 
-def test_csv_export_endpoint():
+def test_csv_export_endpoint(tmp_path):
     """CSV export endpoint should return CSV content."""
     from aviation_anomaly.api import create_app
+    from aviation_anomaly.config import Config
 
-    app = create_app()
+    # Create test config with tmp_path as data_dir
+    test_config = Config()
+    test_config.data_dir = tmp_path
+
+    app = create_app(test_config)
     client = TestClient(app)
 
     response = client.get("/api/h3/incidents.csv?h3_cell=123456789&resolution=5")

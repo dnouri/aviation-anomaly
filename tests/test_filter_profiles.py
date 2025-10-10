@@ -77,9 +77,9 @@ class TestFilterProfiles:
             segments.append(f"""
                 ('7500_{i}', 'abc{i:03d}', 1000, 2000, 1000, {samples + 10},
                  CAST([
-                    {"(1000, '7500', false)," * samples}
-                    (2000, '7500', false)
-                 ] AS STRUCT(time INTEGER, squawk VARCHAR, onground BOOLEAN)[])
+                    {"(1000, '7500', false, 45.0, -122.0)," * samples}
+                    (2000, '7500', false, 45.0, -122.0)
+                 ] AS STRUCT(time INTEGER, squawk VARCHAR, onground BOOLEAN, lat DOUBLE, lon DOUBLE)[])
                 )
             """)
 
@@ -88,17 +88,17 @@ class TestFilterProfiles:
             segments.append(f"""
                 ('7600_{i}', 'def{i:03d}', 3000, 4000, 1000, 150,
                  CAST([
-                    {"(3000, '7600', false)," * 140}
-                    (4000, '7600', false)
-                 ] AS STRUCT(time INTEGER, squawk VARCHAR, onground BOOLEAN)[])
+                    {"(3000, '7600', false, 45.0, -122.0)," * 140}
+                    (4000, '7600', false, 45.0, -122.0)
+                 ] AS STRUCT(time INTEGER, squawk VARCHAR, onground BOOLEAN, lat DOUBLE, lon DOUBLE)[])
                 )
             """)
             segments.append(f"""
                 ('7700_{i}', 'ghi{i:03d}', 5000, 6000, 1000, 150,
                  CAST([
-                    {"(5000, '7700', false)," * 140}
-                    (6000, '7700', false)
-                 ] AS STRUCT(time INTEGER, squawk VARCHAR, onground BOOLEAN)[])
+                    {"(5000, '7700', false, 45.0, -122.0)," * 140}
+                    (6000, '7700', false, 45.0, -122.0)
+                 ] AS STRUCT(time INTEGER, squawk VARCHAR, onground BOOLEAN, lat DOUBLE, lon DOUBLE)[])
                 )
             """)
 

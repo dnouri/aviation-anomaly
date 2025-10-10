@@ -81,8 +81,12 @@ def query_h3_cell_summary(
     if resolution not in range(3, 8):
         return None
 
+    # Load configuration if not provided
+    if config is None:
+        config = Config()
+
     # Build path to H3 incidents file for this resolution
-    h3_file = H3_DATA_DIR / f"h3_incidents_r{resolution}.parquet"
+    h3_file = config.data_dir / "h3" / f"h3_incidents_r{resolution}.parquet"
 
     if not h3_file.exists():
         return None
@@ -93,10 +97,6 @@ def query_h3_cell_summary(
     except (ValueError, TypeError):
         # Invalid H3 cell format
         return None
-
-    # Load configuration if not provided
-    if config is None:
-        config = Config.from_file("config.toml")
 
     # Use provided connection or create a configured one
     if conn is None:
@@ -172,11 +172,16 @@ def query_h3_cell_incidents(
     except (ValueError, TypeError):
         return {"meta": {"count": 0}, "rows": []}
 
+    # Load configuration if not provided
+    if config is None:
+        config = Config()
+
     # Build paths to data files
-    mapping_file = H3_DATA_DIR / f"incident_h3_mapping_r{resolution}.parquet"
+    mapping_file = config.data_dir / "h3" / f"incident_h3_mapping_r{resolution}.parquet"
 
     # Find dated incidents files (exclude test/sample files)
-    incident_files = sorted([f for f in INCIDENTS_DIR.glob("incidents_*.parquet") if DATE_PATTERN.search(f.name)])
+    incidents_dir = config.data_dir / "incidents"
+    incident_files = sorted([f for f in incidents_dir.glob("incidents_*.parquet") if DATE_PATTERN.search(f.name)])
 
     if not incident_files or not mapping_file.exists():
         return {"meta": {"count": 0}, "rows": []}
@@ -189,11 +194,7 @@ def query_h3_cell_incidents(
     # avoiding segment joins entirely. Segments contain full trajectory arrays (~6K points each)
     # and appear duplicated across multiple date files (same segment_id in 3-5 files with different
     # trajectory subsets). Joining and filtering these at query time is expensive.
-    incidents_pattern = str(INCIDENTS_DIR / "incidents_*.parquet")
-
-    # Load configuration if not provided
-    if config is None:
-        config = Config.from_file("config.toml")
+    incidents_pattern = str(incidents_dir / "incidents_*.parquet")
 
     # Use provided connection or create a configured one
     if conn is None:
@@ -316,13 +317,24 @@ def export_h3_incidents_to_csv(
     return output.getvalue()
 
 
-def create_app() -> FastAPI:
-    """Create and configure the FastAPI application."""
+def create_app(config: Config | None = None) -> FastAPI:
+    """Create and configure the FastAPI application.
+
+    Args:
+        config: Optional configuration object. If not provided, uses defaults.
+    """
+    # Use provided config or create default
+    if config is None:
+        config = Config()
+
     app = FastAPI(
         title="Aviation Anomaly Tracker API",
         description="API for querying aviation emergency incidents aggregated to H3 cells",
         version="0.1.0",
     )
+
+    # Store config in app state for access in routes
+    app.state.config = config
 
     @app.get("/health")
     def health_check() -> Response:
@@ -340,14 +352,8 @@ def create_app() -> FastAPI:
         checks = {}
         all_healthy = True
 
-        # Load configuration
-        try:
-            config = Config.from_file("config.toml")
-        except Exception as e:
-            return JSONResponse(
-                content={"status": "unhealthy", "checks": {"config": f"error: {str(e)}"}},
-                status_code=503,
-            )
+        # Get configuration from app state
+        config = app.state.config
 
         # Check DuckDB connection
         try:
@@ -359,7 +365,7 @@ def create_app() -> FastAPI:
             all_healthy = False
 
         # Check critical data file exists and is queryable
-        h3_file = H3_DATA_DIR / "h3_incidents_r3.parquet"
+        h3_file = config.data_dir / "h3" / "h3_incidents_r3.parquet"
         try:
             if not h3_file.exists():
                 checks["data_files"] = f"error: {h3_file} not found"
@@ -395,6 +401,7 @@ def create_app() -> FastAPI:
             h3_cell=h3_cell,
             resolution=resolution,
             emergency_type=emergency_type,
+            config=app.state.config,
         )
 
         if result is None:
@@ -417,6 +424,7 @@ def create_app() -> FastAPI:
             emergency_type=emergency_type,
             limit=limit,
             offset=offset,
+            config=app.state.config,
         )
 
     @app.get("/api/h3/incidents.csv")
@@ -432,6 +440,7 @@ def create_app() -> FastAPI:
             resolution=resolution,
             emergency_type=emergency_type,
             limit=limit,
+            config=app.state.config,
         )
 
         return Response(
@@ -441,7 +450,7 @@ def create_app() -> FastAPI:
         )
 
     # Mount data files for PMTiles access
-    tiles_dir = Path("data/tiles/pmtiles")
+    tiles_dir = config.data_dir / "tiles" / "pmtiles"
     if tiles_dir.exists():
         app.mount("/tiles", StaticFiles(directory=str(tiles_dir)), name="tiles")
 

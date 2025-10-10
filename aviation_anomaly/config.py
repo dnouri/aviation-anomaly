@@ -123,6 +123,7 @@ class DuckDBConfig(BaseModel):
 class Config(BaseModel):
     """Main configuration for Aviation Anomaly Tracker."""
 
+    data_dir: Path = Field(default=Path("data"), description="Base data directory")
     segments: SegmentConfig = Field(default_factory=SegmentConfig)
     incidents: IncidentConfig = Field(default_factory=IncidentConfig)
     aggregation: AggregationConfig = Field(default_factory=AggregationConfig)

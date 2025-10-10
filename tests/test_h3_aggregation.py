@@ -956,6 +956,9 @@ class TestH3DailyMerge:
                     ['7500', '7700'] as emergency_types_list,
                     2 as emergency_type_diversity,
                     '7500' as predominant_emergency_type,  -- MODE from day 1
+                    2 as incidents_7500,  -- 2 of 7500 (predominant)
+                    0 as incidents_7600,
+                    1 as incidents_7700,  -- 1 of 7700
                     0.03 as incident_rate
             ) TO '{day1_file}' (FORMAT PARQUET)
         """)
@@ -975,6 +978,9 @@ class TestH3DailyMerge:
                     ['7700'] as emergency_types_list,
                     1 as emergency_type_diversity,
                     '7700' as predominant_emergency_type,  -- MODE from day 2
+                    0 as incidents_7500,
+                    0 as incidents_7600,
+                    4 as incidents_7700,  -- All 4 are 7700
                     0.027 as incident_rate
             ) TO '{day2_file}' (FORMAT PARQUET)
         """)
