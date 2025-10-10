@@ -42,7 +42,9 @@ def test_health_endpoint():
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    response_json = response.json()
+    assert response_json["status"] == "healthy"
+    assert "checks" in response_json
 
 
 def test_h3_summary_endpoint_validation():
