@@ -59,6 +59,7 @@ omit = [
     "*/conftest.py",
 ]
 relative_files = true
+parallel = true  # Important for pytest-xdist
 
 [tool.coverage.report]
 exclude_lines = [
@@ -72,6 +73,13 @@ exclude_lines = [
 ]
 skip_covered = false
 show_missing = true
+precision = 1
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "coverage.xml"
 
 [tool.ruff]
 target-version = "py313"
