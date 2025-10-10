@@ -51,6 +51,28 @@ markers = [
 testpaths = ["tests"]
 addopts = "-v"
 
+[tool.coverage.run]
+source = ["aviation_anomaly"]
+omit = [
+    "tests/*",
+    "*/__init__.py",
+    "*/conftest.py",
+]
+relative_files = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "def __str__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+skip_covered = false
+show_missing = true
+
 [tool.ruff]
 target-version = "py313"
 line-length = 120
