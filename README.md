@@ -7,6 +7,8 @@
 
 A research tool for exploring global emergency squawk patterns in historical aviation data.
 
+**🗺️ [Explore the demo](https://anomaly.danielnouri.org/)** — Interactive map with sample week of aviation emergency data (July 2025)
+
 ## What & Why
 
 The [OpenSky Report 2020](https://www.cs.ox.ac.uk/files/12039/OpenSky%20Report%202020.pdf) was the first systematic analysis of aircraft emergencies from ADS-B data, revealing that raw emergency squawk codes (7700/7600/7500) contain false positive rates exceeding 1000x actual emergency rates. These false positives come from brief code transitions during dial-up, ground vehicle testing, short transmission bursts, and regional ATC practice variations.
