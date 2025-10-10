@@ -1,5 +1,10 @@
 # Aviation Anomaly Tracker
 
+[![Tests and Coverage](https://github.com/dnouri/aviation-anomaly/actions/workflows/tests-and-coverage.yml/badge.svg)](https://github.com/dnouri/aviation-anomaly/actions/workflows/tests-and-coverage.yml)
+[![Coverage](https://github.com/dnouri/aviation-anomaly/raw/coverage-data/badge.svg)](https://github.com/dnouri/aviation-anomaly/tree/coverage-data)
+[![Lint](https://github.com/dnouri/aviation-anomaly/actions/workflows/lint.yml/badge.svg)](https://github.com/dnouri/aviation-anomaly/actions/workflows/lint.yml)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
+
 A research tool for exploring global emergency squawk patterns in historical aviation data.
 
 ## What & Why

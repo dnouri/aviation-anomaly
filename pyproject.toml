@@ -32,6 +32,7 @@ package = true
 dev-dependencies = [
     "pytest>=8.0.0",
     "pytest-xdist>=3.6.0", # For parallel test execution
+    "pytest-cov>=6.0.0", # For coverage reporting
     "mypy>=1.13.0",
     "ruff>=0.8.0",
     "pre-commit>=3.5.0",

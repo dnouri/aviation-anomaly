@@ -20,6 +20,8 @@ env/
 .pytest_cache/
 .coverage
 htmlcov/
+coverage.xml
+test-results.xml
 .tox/
 .hypothesis/
 tests/data/*.parquet
