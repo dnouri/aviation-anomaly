@@ -3,6 +3,7 @@
 import duckdb
 
 from aviation_anomaly.api import query_h3_cell_summary
+from aviation_anomaly.config import Config
 
 
 def test_query_h3_cell_summary_exists():
@@ -21,11 +22,15 @@ def test_query_h3_cell_returns_summary_data(h3_test_data):
     """Test that we can query summary data for a specific H3 cell."""
     conn = duckdb.connect()
 
+    # Create config with test data directory
+    test_config = Config()
+    test_config.data_dir = h3_test_data.parent.parent  # h3_test_data is tmp_path/h3/file.parquet
+
     # Use fixture data with known values
     test_h3_cell = "594627166885380095"  # Known cell from fixture
 
     # Query the cell summary
-    result = query_h3_cell_summary(conn=conn, h3_cell=test_h3_cell, resolution=4)
+    result = query_h3_cell_summary(conn=conn, h3_cell=test_h3_cell, resolution=4, config=test_config)
 
     # Verify structure
     assert result is not None
@@ -45,8 +50,12 @@ def test_query_nonexistent_cell_returns_none(h3_test_data):
     """Test that querying a non-existent cell returns None."""
     conn = duckdb.connect()
 
+    # Create config with test data directory
+    test_config = Config()
+    test_config.data_dir = h3_test_data.parent.parent
+
     # Use a fake H3 cell that doesn't exist
-    result = query_h3_cell_summary(conn=conn, h3_cell="999999999999999999", resolution=4)
+    result = query_h3_cell_summary(conn=conn, h3_cell="999999999999999999", resolution=4, config=test_config)
 
     assert result is None
 
@@ -55,11 +64,17 @@ def test_query_with_filter_by_emergency_type(h3_test_data):
     """Test filtering by emergency type."""
     conn = duckdb.connect()
 
+    # Create config with test data directory
+    test_config = Config()
+    test_config.data_dir = h3_test_data.parent.parent
+
     # Use known cell that has 7700 emergencies
     test_h3_cell = "594627166885380095"
 
     # Query with filter
-    result = query_h3_cell_summary(conn=conn, h3_cell=test_h3_cell, resolution=4, emergency_type="7700")
+    result = query_h3_cell_summary(
+        conn=conn, h3_cell=test_h3_cell, resolution=4, emergency_type="7700", config=test_config
+    )
 
     # Should return filtered data
     assert result is not None
