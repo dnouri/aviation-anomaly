@@ -32,6 +32,7 @@ package = true
 dev-dependencies = [
     "pytest>=8.0.0",
     "pytest-xdist>=3.6.0", # For parallel test execution
+    "pytest-cov>=6.0.0", # For coverage reporting
     "mypy>=1.13.0",
     "ruff>=0.8.0",
     "pre-commit>=3.5.0",
@@ -49,6 +50,36 @@ markers = [
 ]
 testpaths = ["tests"]
 addopts = "-v"
+
+[tool.coverage.run]
+source = ["aviation_anomaly"]
+omit = [
+    "tests/*",
+    "*/__init__.py",
+    "*/conftest.py",
+]
+relative_files = true
+parallel = true  # Important for pytest-xdist
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "def __str__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+skip_covered = false
+show_missing = true
+precision = 1
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "coverage.xml"
 
 [tool.ruff]
 target-version = "py313"
