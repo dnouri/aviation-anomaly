@@ -159,8 +159,8 @@ validate-sql: ## Validate SQL syntax in sql/ directory
 # Dates to process (modify this for your data range)
 PIPELINE_DATES := 2025-07-02 2025-07-03 2025-07-04 2025-07-05 2025-07-06 2025-07-07
 
-# H3 resolutions to generate (3=coarse, 7=fine)
-PIPELINE_RESOLUTIONS := 3 4 5 6 7
+# H3 resolutions to generate (3=coarse, 6=finest)
+PIPELINE_RESOLUTIONS := 3 4 5 6
 
 # Directories (keep in sync with config.toml)
 PIPELINE_RAW_DIR := data/raw

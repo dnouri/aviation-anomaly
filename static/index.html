@@ -709,13 +709,13 @@
             3: 3,   // only r3 available
             4: 4,   // r3, r4 available → r4
             5: 5,   // r3, r4, r5 available → r5
-            6: 6,   // r3, r4, r5, r6 available → r6
-            7: 7,   // all available → r7 (finest)
-            8: 7,   // r4, r5, r6, r7 available → r7
-            9: 7,   // r5, r6, r7 available → r7
-            10: 7,  // r6, r7 available → r7
-            11: 7,  // only r7 available → r7
-            12: 7   // extend beyond defined range
+            6: 6,   // r6 (finest available)
+            7: 6,
+            8: 6,
+            9: 6,
+            10: 6,
+            11: 6,
+            12: 6
         };
         
         // State management
@@ -963,7 +963,7 @@
         
         // Pre-load all PMTiles sources
         function loadAllSources() {
-            const resolutions = [3, 4, 5, 6, 7];
+            const resolutions = [3, 4, 5, 6];
             let loadCount = 0;
             
             resolutions.forEach(res => {
@@ -991,15 +991,15 @@
         
         // Get the best available resolution for a zoom level
         function getBestResolutionForZoom(zoom) {
-            const targetRes = ZOOM_TO_RESOLUTION[Math.floor(zoom)] || 7;
-            
+            const targetRes = ZOOM_TO_RESOLUTION[Math.floor(zoom)] || 3;
+
             // If target resolution is loaded, use it
             if (loadedSources[targetRes]) {
                 return targetRes;
             }
-            
+
             // Otherwise, find the nearest loaded resolution
-            const resolutions = [3, 4, 5, 6, 7];
+            const resolutions = [3, 4, 5, 6];
             let bestRes = null;
             let minDiff = Infinity;
             

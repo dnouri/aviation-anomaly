@@ -3,7 +3,7 @@
 -- Parameters:
 --   {{segment_file}}: Path to segment Parquet file
 --   {{output_file}}: Path to output metrics file
---   {{resolution}}: H3 resolution (3-7)
+--   {{resolution}}: H3 resolution (3-6)
 -- Note: DuckDB settings and H3 extension are configured on the connection
 
 COPY (
