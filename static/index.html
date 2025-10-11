@@ -14,7 +14,7 @@
         
         #map {
             position: absolute;
-            top: 60px;
+            top: 53px;
             bottom: 0;
             width: 100%;
         }
@@ -26,11 +26,58 @@
             right: 0;
             background: #fff3cd;
             color: #856404;
-            padding: 10px 20px;
+            padding: 10px;
             border-bottom: 1px solid #ffeeba;
             z-index: 1000;
-            text-align: center;
             font-size: 14px;
+            transition: transform 0.3s ease-out;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .coverage-disclaimer.hidden {
+            transform: translateY(-100%);
+        }
+
+        .disclaimer-text {
+            flex: 1;
+            text-align: center;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding: 0 5px;
+        }
+
+        @media (max-width: 400px) {
+            .disclaimer-text {
+                font-size: 13px;
+                text-align: left;
+            }
+        }
+
+        .disclaimer-close {
+            flex-shrink: 0;
+            background: rgba(133, 100, 4, 0.1);
+            border: 1px solid rgba(133, 100, 4, 0.2);
+            border-radius: 4px;
+            color: #856404;
+            font-size: 18px;
+            cursor: pointer;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+            transition: background 0.2s, transform 0.1s;
+        }
+
+        .disclaimer-close:hover {
+            background: rgba(133, 100, 4, 0.2);
+        }
+
+        .disclaimer-close:active {
+            transform: scale(0.95);
         }
         
         .legend {
@@ -227,7 +274,7 @@
         
         .filter-controls {
             position: absolute;
-            top: 80px;
+            top: 63px;
             right: 10px;
             background: white;
             padding: 15px;
@@ -324,12 +371,263 @@
             font-weight: 500;
             min-width: 80px;
         }
+
+        /* Disclaimer dismissal adjustments */
+        body.disclaimer-dismissed #map {
+            top: 0 !important;
+            height: 100vh !important;
+        }
+
+        /* Desktop-only filter repositioning */
+        @media (min-width: 769px) {
+            body.disclaimer-dismissed .filter-controls {
+                top: 10px !important;
+            }
+        }
+
+        @media (max-width: 768px) {
+            #map {
+                top: 50px;  /* Reduced disclaimer height on mobile */
+            }
+
+            body.disclaimer-dismissed .filter-controls {
+                bottom: 10px;
+            }
+
+            body.disclaimer-dismissed .legend {
+                top: 10px;
+            }
+
+            /* Compact disclaimer banner */
+            .coverage-disclaimer {
+                padding: 8px 10px;
+                font-size: 12px;
+            }
+
+            /* Transform incident details into bottom sheet */
+            #incident-details {
+                position: fixed;
+                top: auto;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                max-width: 100%;
+                max-height: 70vh;
+                border-radius: 16px 16px 0 0;
+                transform: translateY(100%);
+                transition: transform 0.3s ease-out;
+                box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+                z-index: 100;
+            }
+
+            #incident-details.visible {
+                transform: translateY(0);
+            }
+
+            /* Add drag handle to bottom sheet */
+            #incident-details::before {
+                content: '';
+                position: absolute;
+                top: 8px;
+                left: 50%;
+                transform: translateX(-50%);
+                width: 40px;
+                height: 4px;
+                background: #d0d0d0;
+                border-radius: 2px;
+            }
+
+            #incident-details h4 {
+                margin-top: 20px;  /* Space for drag handle */
+            }
+
+            /* Stack filter controls vertically */
+            .filter-controls {
+                position: fixed;
+                top: auto;
+                bottom: 10px;
+                left: 10px;
+                right: auto;
+                padding: 12px;
+                background: rgba(255, 255, 255, 0.95);
+                max-width: 200px;
+                border-radius: 8px;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+            }
+
+            .filter-controls label {
+                font-size: 14px;
+                display: block;
+                margin-bottom: 5px;
+            }
+
+            /* Increase select touch target */
+            .filter-controls select {
+                width: 100%;
+                height: 44px;  /* iOS minimum touch target */
+                font-size: 16px;  /* Prevents zoom on iOS */
+                padding: 10px;
+            }
+
+            /* Fix display mode toggle layout on mobile */
+            .display-mode-toggle {
+                margin: 10px 0;
+                font-size: 14px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+
+            /* Hide redundant labels on mobile */
+            .display-mode-toggle > span:not(#display-mode-label) {
+                display: none;  /* Hide "Display:" and "Normalized" text */
+            }
+
+            /* Style the dynamic label */
+            #display-mode-label {
+                font-weight: 500;
+                min-width: auto;
+                margin-right: 5px;
+            }
+
+            .resolution-indicator {
+                font-size: 11px;
+                margin-top: 8px;
+                padding-top: 8px;
+            }
+
+            /* Transform legend into compact floating element */
+            .legend {
+                position: fixed;
+                bottom: auto;
+                top: 60px;
+                right: 10px;
+                padding: 10px;
+                max-width: 150px;
+                background: rgba(255, 255, 255, 0.95);
+                font-size: 11px;
+                transform-origin: top right;
+                transition: transform 0.2s ease;
+                border-radius: 8px;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+            }
+
+            .legend h4 {
+                font-size: 12px;
+                margin: 0 0 6px 0;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+            }
+
+            /* CSS chevron using border */
+            .legend h4::after {
+                content: '';
+                display: inline-block;
+                width: 0;
+                height: 0;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #666;
+                transition: transform 0.2s ease;
+                margin-left: 8px;
+            }
+
+            .legend.collapsed h4::after {
+                transform: rotate(-90deg);
+            }
+
+            /* Collapsible legend content */
+            .legend #legend-items,
+            .legend .legend-footer {
+                transition: max-height 0.2s ease, opacity 0.2s ease;
+                max-height: 300px;
+                opacity: 1;
+            }
+
+            .legend.collapsed #legend-items,
+            .legend.collapsed .legend-footer {
+                max-height: 0;
+                opacity: 0;
+                overflow: hidden;
+            }
+
+            /* Increase legend touch targets on mobile */
+            .legend-item {
+                padding: 3px 0;
+                min-height: 24px;
+            }
+
+            .legend-color {
+                width: 24px;
+                height: 24px;
+            }
+
+            /* Adjust legend footer for mobile */
+            .legend-footer {
+                font-size: 10px;
+                margin-top: 8px;
+                padding-top: 6px;
+            }
+
+            /* Hide tooltip on mobile (use native touch feedback instead) */
+            .legend-footer a::after,
+            .legend-footer a::before {
+                display: none;
+            }
+
+            /* Improve incident table for mobile */
+            .incident-table {
+                font-size: 11px;
+            }
+
+            .incident-table th,
+            .incident-table td {
+                padding: 6px 4px;
+            }
+
+            /* Stack replay button for better touch */
+            .replay-button {
+                padding: 8px 12px;
+                font-size: 12px;
+                display: block;
+                text-align: center;
+            }
+
+            /* Ensure emergency badges are readable */
+            .emergency-badge {
+                padding: 3px 6px;
+                font-size: 10px;
+            }
+        }
+
+        /* Landscape mobile adjustments */
+        @media (max-width: 768px) and (orientation: landscape) {
+            #incident-details {
+                max-height: 90vh;  /* More space in landscape */
+            }
+
+            .filter-controls {
+                bottom: auto;
+                top: 60px;
+                max-width: 160px;
+            }
+
+            .legend {
+                top: auto;
+                bottom: 10px;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="coverage-disclaimer">
-        <strong>Note:</strong> Emergency squawk rates shown are from observed traffic only. 
-        Coverage and emergency procedures vary significantly by region.
+    <div class="coverage-disclaimer" id="coverage-disclaimer">
+        <div class="disclaimer-text">
+            <strong>Note:</strong> Emergency squawk rates shown are from observed traffic only.
+            Coverage and emergency procedures vary significantly by region.
+        </div>
+        <button class="disclaimer-close" aria-label="Close disclaimer">×</button>
     </div>
     
     <div id="map"></div>
@@ -518,7 +816,7 @@
             
             map.addLayer(layerConfig);
             
-            console.log(`Added layer for resolution ${resolution} with filter: ${filter}`);
+            // console.log(`Added layer for resolution ${resolution} with filter: ${filter}`);
         }
         
         // Register event handlers for the H3 layer
@@ -632,11 +930,11 @@
         // Switch to a new resolution
         function switchToResolution(newRes) {
             if (currentResolution === newRes) {
-                console.log(`Already at resolution ${newRes}, skipping switch`);
+                // console.log(`Already at resolution ${newRes}, skipping switch`);
                 return;
             }
-            
-            console.log(`Switching from resolution ${currentResolution} to ${newRes} at zoom ${map.getZoom().toFixed(2)}`);
+
+            // console.log(`Switching from resolution ${currentResolution} to ${newRes} at zoom ${map.getZoom().toFixed(2)}`);
             
             // Show loading indicator
             document.getElementById('loading-indicator').classList.add('visible');
@@ -679,7 +977,7 @@
                     
                     loadedSources[res] = true;
                     loadCount++;
-                    console.log(`Loaded PMTiles for resolution ${res}`);
+                    // console.log(`Loaded PMTiles for resolution ${res}`);
                     
                 } catch (error) {
                     console.error(`Failed to load PMTiles for resolution ${res}:`, error);
@@ -687,7 +985,7 @@
                 }
             });
             
-            console.log(`Successfully loaded ${loadCount}/${resolutions.length} PMTiles sources`);
+            // console.log(`Successfully loaded ${loadCount}/${resolutions.length} PMTiles sources`);
             return loadCount > 0;
         }
         
@@ -718,10 +1016,110 @@
             return bestRes;
         }
         
+        // Initialize disclaimer dismissal functionality
+        function initDisclaimerDismissal() {
+            const disclaimer = document.getElementById('coverage-disclaimer');
+            const closeBtn = disclaimer?.querySelector('.disclaimer-close');
+
+            closeBtn?.addEventListener('click', () => {
+                disclaimer.classList.add('hidden');
+                document.body.classList.add('disclaimer-dismissed');
+            });
+        }
+
+        // Mobile-specific interactions
+        function initMobileInteractions() {
+            const isMobile = window.matchMedia('(max-width: 768px)').matches;
+            if (!isMobile) return;
+
+            // Make legend collapsible on mobile and default to collapsed
+            const legend = document.querySelector('.legend');
+            const legendTitle = legend?.querySelector('h4');
+
+            if (legend && !legend.dataset.initialized) {
+                // Default to collapsed on mobile
+                legend.classList.add('collapsed');
+                legend.dataset.initialized = 'true';
+
+                legendTitle?.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    legend.classList.toggle('collapsed');
+                });
+            }
+
+            // Add swipe-to-dismiss for incident details
+            const incidentPanel = document.getElementById('incident-details');
+            if (incidentPanel) {
+                let startY = 0;
+                let currentY = 0;
+                let isDragging = false;
+
+                const handleTouchStart = (e) => {
+                    startY = e.touches[0].clientY;
+                    isDragging = true;
+                    incidentPanel.style.transition = 'none';
+                };
+
+                const handleTouchMove = (e) => {
+                    if (!isDragging) return;
+                    currentY = e.touches[0].clientY;
+                    const deltaY = currentY - startY;
+
+                    // Only allow downward swipes
+                    if (deltaY > 0) {
+                        incidentPanel.style.transform = `translateY(${deltaY}px)`;
+                    }
+                };
+
+                const handleTouchEnd = (e) => {
+                    if (!isDragging) return;
+                    isDragging = false;
+                    incidentPanel.style.transition = 'transform 0.3s ease-out';
+
+                    const deltaY = currentY - startY;
+
+                    // If swiped down more than 100px, dismiss the panel
+                    if (deltaY > 100) {
+                        incidentPanel.classList.remove('visible');
+                        incidentPanel.style.transform = '';
+                    } else {
+                        incidentPanel.style.transform = '';
+                    }
+
+                    startY = 0;
+                    currentY = 0;
+                };
+
+                incidentPanel.addEventListener('touchstart', handleTouchStart, { passive: true });
+                incidentPanel.addEventListener('touchmove', handleTouchMove, { passive: true });
+                incidentPanel.addEventListener('touchend', handleTouchEnd, { passive: true });
+            }
+
+            // Dismiss incident panel on tap outside (mobile only)
+            document.addEventListener('click', (e) => {
+                if (isMobile && incidentPanel?.classList.contains('visible')) {
+                    if (!incidentPanel.contains(e.target) && !e.target.closest('.maplibregl-canvas-container')) {
+                        incidentPanel.classList.remove('visible');
+                    }
+                }
+            });
+        }
+
+        // Initialize disclaimer dismissal immediately
+        initDisclaimerDismissal();
+
         // Map load handler
         map.on('load', () => {
-            console.log('Map loaded, initializing multi-resolution system');
-            
+            // console.log('Map loaded, initializing multi-resolution system');
+
+            // Initialize mobile interactions
+            initMobileInteractions();
+
+            // Re-initialize on window resize
+            window.addEventListener('resize', () => {
+                initMobileInteractions();
+            });
+
             // Pre-load all PMTiles sources
             if (!loadAllSources()) {
                 console.error('Failed to load any PMTiles sources');
@@ -741,7 +1139,7 @@
                 const targetRes = getBestResolutionForZoom(newZoom);
                 
                 if (targetRes && targetRes !== currentResolution) {
-                    console.log(`Zoom changed to ${newZoom.toFixed(2)}, switching to resolution ${targetRes}`);
+                    // console.log(`Zoom changed to ${newZoom.toFixed(2)}, switching to resolution ${targetRes}`);
                     switchToResolution(targetRes);
                 }
             });
@@ -778,7 +1176,7 @@
             document.getElementById('display-mode-label').textContent =
                 displayMode === 'absolute' ? 'Absolute' : 'Normalized';
 
-            console.log(`Display mode changed to: ${displayMode}`);
+            // console.log(`Display mode changed to: ${displayMode}`);
 
             // Update legend
             updateLegend();
@@ -796,7 +1194,7 @@
             const filterValue = e.target.value;
             currentFilter = filterValue;
 
-            console.log(`Filter changed to: ${filterValue}`);
+            // console.log(`Filter changed to: ${filterValue}`);
 
             // Remove and re-add the layer with new filter
             if (currentResolution !== null) {
