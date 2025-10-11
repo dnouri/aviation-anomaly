@@ -13,7 +13,7 @@
 | aviation\_anomaly/h3\_aggregation.py     |      231 |       52 |     77.5% |37, 40, 77-82, 111, 135-136, 172, 195-198, 234, 269, 282-285, 296, 309-312, 345, 369-372, 396, 420-423, 446, 470-473, 496, 498, 522-525, 548, 571-574 |
 | aviation\_anomaly/incident\_detection.py |       65 |       23 |     64.6% |60, 157-173, 186-225 |
 | aviation\_anomaly/logging.py             |       39 |        0 |    100.0% |           |
-| aviation\_anomaly/pmtiles\_generation.py |       64 |       23 |     64.1% |123, 134, 186, 189, 212-241 |
+| aviation\_anomaly/pmtiles\_generation.py |       64 |       23 |     64.1% |122, 133, 185, 188, 211-240 |
 | aviation\_anomaly/segmentation.py        |       89 |       22 |     75.3% |32, 136-141, 176-179, 208-223 |
 | aviation\_anomaly/tile\_generation.py    |       50 |       34 |     32.0% |52-55, 72-132 |
 |                                **TOTAL** | **1427** |  **505** | **64.6%** |           |
