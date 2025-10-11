@@ -115,14 +115,14 @@ class TestFrontendE2E:
         sources_loaded = page.evaluate("""
             () => {
                 const results = [];
-                for (let res = 3; res <= 7; res++) {
+                for (let res = 3; res <= 6; res++) {
                     const source = window.map.getSource(`h3-tiles-r${res}`);
                     if (source) results.push(res);
                 }
                 return results;
             }
         """)
-        assert len(sources_loaded) == 5, f"Expected 5 sources, found {len(sources_loaded)}"
+        assert len(sources_loaded) == 4, f"Expected 4 sources, found {len(sources_loaded)}"
 
         has_layer = page.evaluate("window.map && window.map.getLayer('h3-cells') !== undefined")
         assert has_layer, "H3 cells layer not found"
@@ -199,21 +199,21 @@ class TestFrontendE2E:
         resolution = page.evaluate("window.currentResolution")
         assert resolution == 3, f"Expected resolution 3 at zoom 3, got {resolution}"
 
-        # Test zoom level 7 → resolution 7
+        # Test zoom level 7 → resolution 6 (highest available)
         page.evaluate("window.map.setZoom(7)")
         time.sleep(1)
         resolution = page.evaluate("window.currentResolution")
-        assert resolution == 7, f"Expected resolution 7 at zoom 7, got {resolution}"
+        assert resolution == 6, f"Expected resolution 6 at zoom 7, got {resolution}"
 
-        # Test zoom level 10 → resolution 7 (highest available)
+        # Test zoom level 10 → resolution 6 (highest available)
         page.evaluate("window.map.setZoom(10)")
         time.sleep(1)
         resolution = page.evaluate("window.currentResolution")
-        assert resolution == 7, f"Expected resolution 7 at zoom 10, got {resolution}"
+        assert resolution == 6, f"Expected resolution 6 at zoom 10, got {resolution}"
 
         # Verify resolution indicator updates
         indicator = page.locator("#current-resolution")
-        expect(indicator).to_have_text("7")
+        expect(indicator).to_have_text("6")
 
     def test_filter_persists_across_resolution_changes(self, page: Page, live_server: str):
         """Test that emergency type filters persist when resolution changes."""

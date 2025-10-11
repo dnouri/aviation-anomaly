@@ -497,8 +497,8 @@ def detect(
 )
 @click.option(
     "--resolutions",
-    default="3,4,5,6,7",
-    help="Comma-separated H3 resolutions (default: 3,4,5,6,7)",
+    default="3,4,5,6",
+    help="Comma-separated H3 resolutions (default: 3,4,5,6)",
 )
 @click.option(
     "--force",
@@ -686,8 +686,8 @@ def aggregate(
 @click.option(
     "--resolutions",
     multiple=True,
-    type=click.IntRange(3, 7),
-    help="H3 resolutions to export (default: 3-7)",
+    type=click.IntRange(3, 6),
+    help="H3 resolutions to export (default: 3-6)",
 )
 @click.option(
     "--skip-geojson",

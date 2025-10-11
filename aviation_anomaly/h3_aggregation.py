@@ -25,7 +25,7 @@ def compute_h3_coverage(
     Args:
         segment_file: Path to segment Parquet file (or glob pattern)
         output_file: Path to output aggregation Parquet file
-        resolution: H3 resolution (3-7)
+        resolution: H3 resolution (3-6)
         config: Configuration object (optional)
         connection: DuckDB connection to reuse (optional)
     """
@@ -36,8 +36,8 @@ def compute_h3_coverage(
     if not is_glob_pattern and not segment_file.exists():
         raise FileNotFoundError(f"Segment file not found: {segment_file}")
 
-    if resolution not in range(3, 8):
-        raise ValueError(f"Resolution must be between 3 and 7, got {resolution}")
+    if resolution not in range(3, 7):
+        raise ValueError(f"Resolution must be between 3 and 6, got {resolution}")
 
     # Load configuration
     if config is None:
@@ -97,7 +97,7 @@ def compute_h3_coverage_multi_resolution(
     Args:
         segment_files: Path to segment file or list of segment files
         output_dir: Directory for output files
-        resolutions: List of H3 resolutions (default: [3,4,5,6,7])
+        resolutions: List of H3 resolutions (default: [3,4,5,6])
         config: Configuration object (optional)
 
     Returns:
@@ -108,7 +108,7 @@ def compute_h3_coverage_multi_resolution(
         segment_files = [segment_files]
 
     if resolutions is None:
-        resolutions = [3, 4, 5, 6, 7]
+        resolutions = [3, 4, 5, 6]
 
     if config is None:
         config = Config.from_file(Path("config.toml"))
@@ -338,11 +338,11 @@ def merge_h3_daily_coverage(
     Args:
         daily_dir: Directory containing daily H3 coverage files
         output_file: Path to merged output file
-        resolution: H3 resolution (3-7)
+        resolution: H3 resolution (3-6)
         config: Configuration object (optional)
     """
-    if resolution not in range(3, 8):
-        raise ValueError(f"Resolution must be between 3 and 7, got {resolution}")
+    if resolution not in range(3, 7):
+        raise ValueError(f"Resolution must be between 3 and 6, got {resolution}")
 
     if config is None:
         config = Config.from_file(Path("config.toml"))
@@ -389,11 +389,11 @@ def merge_h3_daily_incidents(
     Args:
         daily_dir: Directory containing daily H3 incident files
         output_file: Path to merged output file
-        resolution: H3 resolution (3-7)
+        resolution: H3 resolution (3-6)
         config: Configuration object (optional)
     """
-    if resolution not in range(3, 8):
-        raise ValueError(f"Resolution must be between 3 and 7, got {resolution}")
+    if resolution not in range(3, 7):
+        raise ValueError(f"Resolution must be between 3 and 6, got {resolution}")
 
     if config is None:
         config = Config.from_file(Path("config.toml"))
@@ -439,11 +439,11 @@ def merge_incident_h3_mapping(
     Args:
         daily_dir: Directory containing daily incident mapping files
         output_file: Path to merged output file
-        resolution: H3 resolution (3-7)
+        resolution: H3 resolution (3-6)
         config: Configuration object (optional)
     """
-    if resolution not in range(3, 8):
-        raise ValueError(f"Resolution must be between 3 and 7, got {resolution}")
+    if resolution not in range(3, 7):
+        raise ValueError(f"Resolution must be between 3 and 6, got {resolution}")
 
     if config is None:
         config = Config.from_file(Path("config.toml"))

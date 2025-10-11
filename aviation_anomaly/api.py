@@ -70,7 +70,7 @@ def query_h3_cell_summary(
     Args:
         conn: Optional DuckDB connection (will create if not provided)
         h3_cell: H3 cell identifier (string representation of UBIGINT)
-        resolution: H3 resolution (3-7)
+        resolution: H3 resolution (3-6)
         emergency_type: Optional filter by emergency type (7500/7600/7700)
         config: Optional configuration object
 
@@ -78,7 +78,7 @@ def query_h3_cell_summary(
         Dictionary with cell summary data, or None if cell not found
     """
     # Validate resolution range
-    if resolution not in range(3, 8):
+    if resolution not in range(3, 7):
         return None
 
     # Load configuration if not provided
@@ -153,7 +153,7 @@ def query_h3_cell_incidents(
     Args:
         conn: Optional DuckDB connection (will create if not provided)
         h3_cell: H3 cell identifier
-        resolution: H3 resolution (3-7)
+        resolution: H3 resolution (3-6)
         emergency_type: Optional filter by emergency type (7500/7600/7700)
         limit: Maximum number of results (default 200)
         offset: Offset for pagination (default 0)
@@ -163,7 +163,7 @@ def query_h3_cell_incidents(
         Dictionary with metadata and incident rows
     """
     # Validate inputs
-    if resolution not in range(3, 8):
+    if resolution not in range(3, 7):
         return {"meta": {"count": 0}, "rows": []}
 
     # Validate and convert h3_cell to integer
@@ -268,7 +268,7 @@ def export_h3_incidents_to_csv(
     Args:
         conn: Optional DuckDB connection to reuse
         h3_cell: H3 cell to query
-        resolution: H3 resolution (3-7)
+        resolution: H3 resolution (3-6)
         emergency_type: Optional filter for emergency type
         limit: Maximum rows to return (default 200, enforced by SQL)
         config: Optional configuration
@@ -393,7 +393,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/api/h3/summary")
     def get_h3_summary(
         h3_cell: str = Query(..., description="H3 cell identifier"),
-        resolution: int = Query(..., ge=3, le=7, description="H3 resolution (3-7)"),
+        resolution: int = Query(..., ge=3, le=6, description="H3 resolution (3-6)"),
         emergency_type: str | None = Query(None, pattern="^(7500|7600|7700)$", description="Emergency type filter"),
     ) -> dict[str, Any]:
         """Get summary statistics for an H3 cell."""
@@ -412,7 +412,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/api/h3/incidents")
     def get_h3_incidents(
         h3_cell: str = Query(..., description="H3 cell identifier"),
-        resolution: int = Query(..., ge=3, le=7, description="H3 resolution (3-7)"),
+        resolution: int = Query(..., ge=3, le=6, description="H3 resolution (3-6)"),
         emergency_type: str | None = Query(None, pattern="^(7500|7600|7700)$", description="Emergency type filter"),
         limit: int = Query(200, le=1000, description="Maximum results"),
         offset: int = Query(0, ge=0, description="Pagination offset"),
@@ -430,7 +430,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/api/h3/incidents.csv")
     def export_incidents_csv(
         h3_cell: str = Query(..., description="H3 cell identifier"),
-        resolution: int = Query(..., ge=3, le=7, description="H3 resolution (3-7)"),
+        resolution: int = Query(..., ge=3, le=6, description="H3 resolution (3-6)"),
         emergency_type: str | None = Query(None, pattern="^(7500|7600|7700)$", description="Emergency type filter"),
         limit: int = Query(200, le=1000, description="Maximum results"),
     ) -> Response:

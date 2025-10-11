@@ -2,9 +2,9 @@
 -- Creates a lookup table for efficient drill-down queries
 -- Parameters:
 --   {{incidents_file}}: Path to incidents Parquet file
---   {{segments_file}}: Path to segments Parquet file  
+--   {{segments_file}}: Path to segments Parquet file
 --   {{output_file}}: Path to output mapping Parquet file
---   {{resolution}}: H3 resolution (3-7)
+--   {{resolution}}: H3 resolution (3-6)
 
 COPY (
     -- Join incidents with segments to get trajectory points

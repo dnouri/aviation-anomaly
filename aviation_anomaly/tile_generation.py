@@ -66,11 +66,11 @@ def export_h3_files_to_geojson(
     Args:
         h3_dir: Directory containing H3 aggregation files
         output_dir: Directory to write GeoJSON files
-        resolutions: List of resolutions to export (default: 3-7)
+        resolutions: List of resolutions to export (default: 3-6)
         config: Configuration object (optional)
     """
     if resolutions is None:
-        resolutions = [3, 4, 5, 6, 7]
+        resolutions = [3, 4, 5, 6]
 
     if config is None:
         config = Config()

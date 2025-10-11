@@ -4,7 +4,7 @@
 --   {{incidents_file}}: Path to incidents Parquet file
 --   {{segments_file}}: Path to segments Parquet file
 --   {{output_file}}: Path to output aggregation Parquet file
---   {{resolution}}: H3 resolution (3-7)
+--   {{resolution}}: H3 resolution (3-6)
 
 COPY (
     -- First, join incidents with segments to get points

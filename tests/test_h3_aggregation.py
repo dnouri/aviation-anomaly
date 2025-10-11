@@ -113,13 +113,13 @@ class TestH3Aggregation:
         output_dir = Path(tempfile.gettempdir()) / "h3_coverage"
         output_dir.mkdir(exist_ok=True)
 
-        # Compute for resolutions 3-7
+        # Compute for resolutions 3-6
         compute_h3_coverage_multi_resolution(
-            segment_files=test_segments_file, output_dir=output_dir, resolutions=[3, 4, 5, 6, 7]
+            segment_files=test_segments_file, output_dir=output_dir, resolutions=[3, 4, 5, 6]
         )
 
         # Verify files created for each resolution
-        for res in [3, 4, 5, 6, 7]:
+        for res in [3, 4, 5, 6]:
             output_file = output_dir / f"h3_coverage_r{res}.parquet"
             assert output_file.exists(), f"Output file for resolution {res} should exist"
 

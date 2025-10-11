@@ -11,7 +11,7 @@ def get_zoom_range_for_resolution(resolution: int) -> tuple[int, int]:
     """Get appropriate zoom range for H3 resolution.
 
     Args:
-        resolution: H3 resolution (3-7)
+        resolution: H3 resolution (3-6)
 
     Returns:
         Tuple of (min_zoom, max_zoom)
@@ -19,13 +19,12 @@ def get_zoom_range_for_resolution(resolution: int) -> tuple[int, int]:
     # Map H3 resolution to appropriate zoom ranges
     # H3 res 3 is very coarse (avg edge 59km), good for z3-7
     # H3 res 5 is medium (avg edge 9km), good for z5-9
-    # H3 res 7 is fine (avg edge 1.3km), good for z7-11
+    # H3 res 6 is finest (avg edge 3.2km), good for z6-10
     zoom_ranges = {
         3: (3, 7),
         4: (4, 8),
         5: (5, 9),
         6: (6, 10),
-        7: (7, 11),
     }
     return zoom_ranges.get(resolution, (resolution, resolution + 4))
 
@@ -204,13 +203,13 @@ def generate_pmtiles_for_resolutions(
     Args:
         geojson_dir: Directory containing GeoJSONL files
         output_dir: Directory for PMTiles output
-        resolutions: List of resolutions to process (default: 3-7)
+        resolutions: List of resolutions to process (default: 3-6)
 
     Returns:
         Dictionary mapping resolution to output file path
     """
     if resolutions is None:
-        resolutions = [3, 4, 5, 6, 7]
+        resolutions = [3, 4, 5, 6]
 
     results = {}
 

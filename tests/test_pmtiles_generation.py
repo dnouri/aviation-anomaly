@@ -23,8 +23,8 @@ def test_get_zoom_range_for_resolution():
     # H3 resolution 5 (medium) -> medium zoom range
     assert get_zoom_range_for_resolution(5) == (5, 9)
 
-    # H3 resolution 7 (fine) -> narrower zoom range
-    assert get_zoom_range_for_resolution(7) == (7, 11)
+    # H3 resolution 6 (finest) -> narrower zoom range
+    assert get_zoom_range_for_resolution(6) == (6, 10)
 
 
 def test_build_tippecanoe_command():
