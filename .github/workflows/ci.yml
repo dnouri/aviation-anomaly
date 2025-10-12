@@ -31,6 +31,9 @@ jobs:
       - name: Sync dependencies (dev)
         run: uv sync --dev
 
+      - name: Install Playwright browsers
+        run: uv run playwright install chromium
+
       - name: Run tests (xdist) with coverage + JUnit
         run: |
           uv run pytest -n auto -v \

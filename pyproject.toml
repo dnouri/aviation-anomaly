@@ -59,7 +59,6 @@ omit = [
     "*/conftest.py",
 ]
 relative_files = true
-parallel = true  # Important for pytest-xdist
 
 [tool.coverage.report]
 exclude_lines = [
