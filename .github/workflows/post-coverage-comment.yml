@@ -1,0 +1,33 @@
+name: Post coverage comment
+
+on:
+  workflow_run:
+    workflows: [ "CI" ]     # must match the name in ci.yml
+    types: [ completed ]
+
+permissions:
+  pull-requests: write   # needed to post/edit PR comment
+  contents: write        # update existing comment if present
+  actions: read          # needed to read artifacts from the triggering run
+
+jobs:
+  post:
+    name: Publish PR coverage comment
+    runs-on: ubuntu-latest
+
+    # Only when the upstream run was for a PR and succeeded
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      # Do NOT checkout untrusted code here (by design).
+      - name: Post comment from artifact
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tell the action which CI run to pull the comment artifact from:
+          GITHUB_PR_RUN_ID: ${{ github.event.workflow_run.id }}
+          # If you customized names in CI, uncomment to match:
+          # COMMENT_ARTIFACT_NAME: python-coverage-comment-action
+          # COMMENT_FILENAME: python-coverage-comment-action.txt
