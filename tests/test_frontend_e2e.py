@@ -12,9 +12,11 @@ from playwright.sync_api import Page, expect
 @pytest.fixture(scope="module")
 def live_server():
     """Start the FastAPI server for testing."""
+    import os
     import socket
     import subprocess
     import time
+    from pathlib import Path
 
     # Find an available port
     def find_free_port():
@@ -27,9 +29,29 @@ def live_server():
     port = find_free_port()
     server_url = f"http://127.0.0.1:{port}"
 
-    # Start server in background
+    # Set up environment for subprocess coverage
+    env = os.environ.copy()
+    env["COVERAGE_PROCESS_START"] = str(Path.cwd() / "pyproject.toml")
+
+    # Copy COV_* environment variables from pytest-cov
+    for key, value in os.environ.items():
+        if key.startswith("COV_"):
+            env[key] = value
+
+    # Start server in background with coverage measurement
     process = subprocess.Popen(
-        ["uv", "run", "aviation-anomaly", "serve", "--port", str(port)],
+        [
+            "uv",
+            "run",
+            "coverage",
+            "run",
+            "-m",
+            "aviation_anomaly.cli",
+            "serve",
+            "--port",
+            str(port),
+        ],
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
