@@ -59,7 +59,8 @@ omit = [
     "*/conftest.py",
 ]
 relative_files = true
-parallel = true  # Important for pytest-xdist
+sigterm = true  # Write coverage data on SIGTERM (for subprocess coverage)
+parallel = true  # Enable parallel data collection (for subprocess coverage)
 
 [tool.coverage.report]
 exclude_lines = [

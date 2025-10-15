@@ -20,6 +20,8 @@ install: ## Install project and dev dependencies
 	uv sync --dev
 	@echo "Installing pre-commit hooks..."
 	uv run pre-commit install
+	@echo "Installing Playwright browsers..."
+	uv run playwright install chromium
 	@echo "✓ Installation complete"
 
 test: ## Run all tests with pytest in parallel

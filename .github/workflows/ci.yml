@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [ main, master ]
+
+# For PRs from forks, GITHUB_TOKEN is read-only; these permissions
+# mainly apply on trusted pushes to main/master.
+permissions:
+  contents: write        # needed to update the data branch on default branch pushes
+  pull-requests: write   # harmless on forks (read-only), useful on same-repo PRs
+  checks: write          # for test-reporter Check
+  actions: read          # allow reading artifacts in follow-up workflows if needed
+
+jobs:
+  test:
+    name: Test & Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Python 3.13 (via uv)
+        run: uv python install 3.13
+
+      - name: Sync dependencies (dev)
+        run: uv sync --dev
+
+      - name: Install Playwright browsers
+        run: uv run playwright install chromium
+
+      - name: Run tests (xdist) with coverage + JUnit
+        run: |
+          uv run pytest -n auto -v \
+            --cov --cov-report=xml --cov-report=html --cov-report=term \
+            --junitxml=test-results.xml
+
+      - name: Upload coverage artifacts (needs hidden files)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: |
+            .coverage
+            coverage.xml
+            htmlcov/
+          include-hidden-files: true  # required since hidden files are excluded by default
+
+      - name: Publish test results (GitHub Check)
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Test Results
+          path: test-results.xml
+          reporter: java-junit
+
+      # On PRs: compute the PR comment body and save it as an artifact (do NOT post yet).
+      # On default branch pushes: the action will update the badge/data branch.
+      - name: Coverage analysis (compute PR comment or update badge)
+        id: cov
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
+          # Optional: set your own branch name; default is python-coverage-comment-action-data
+          # COVERAGE_DATA_BRANCH: coverage-data
+          ANNOTATE_MISSING_LINES: true
+          ANNOTATION_TYPE: warning
+
+      - name: Store PR comment to artifact (only on PRs)
+        if: steps.cov.outputs.COMMENT_FILE_WRITTEN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage-comment-action
+          path: python-coverage-comment-action.txt
