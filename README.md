@@ -4,6 +4,7 @@
 [![Coverage](https://github.com/dnouri/aviation-anomaly/raw/coverage-data/badge.svg)](https://github.com/dnouri/aviation-anomaly/tree/coverage-data)
 [![Lint](https://github.com/dnouri/aviation-anomaly/actions/workflows/lint.yml/badge.svg)](https://github.com/dnouri/aviation-anomaly/actions/workflows/lint.yml)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
+[![License: AGPL v3+](https://img.shields.io/badge/License-AGPL%20v3+-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
 A research tool for exploring global emergency squawk patterns in historical aviation data.
 
@@ -374,3 +375,9 @@ This project uses historical ADS-B data from the [OpenSky Network](https://opens
 Schäfer, M., Strohmeier, M., Lenders, V., Martinovic, I., & Wilhelm, M. (2014). Bringing up OpenSky: A large-scale ADS-B sensor network for research. In *Proceedings of the 13th IEEE/ACM International Symposium on Information Processing in Sensor Networks (IPSN)*, pp. 83-94. [https://ieeexplore.ieee.org/document/6846743](https://ieeexplore.ieee.org/document/6846743)
 
 We are grateful to OpenSky Network and its volunteer contributors for making this research possible.
+
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). See [LICENSE](LICENSE) for the full license text.
+
+The AGPL ensures that anyone who uses this software over a network (including modified versions) must provide access to the source code. This protects the research community by ensuring improvements remain open and collaborative.

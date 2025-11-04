@@ -2,6 +2,7 @@
 name = "aviation-anomaly"
 version = "0.1.0"
 description = "Aviation anomaly tracker - analyze emergency patterns in flight data"
+license = "AGPL-3.0-or-later"
 # readme = "README.md"  # TODO: Add README later
 requires-python = ">=3.13"
 dependencies = [
