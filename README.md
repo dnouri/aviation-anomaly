@@ -1,6 +1,6 @@
 # Aviation Anomaly Tracker
 
-[![Tests and Coverage](https://github.com/dnouri/aviation-anomaly/actions/workflows/tests-and-coverage.yml/badge.svg)](https://github.com/dnouri/aviation-anomaly/actions/workflows/tests-and-coverage.yml)
+[![Tests and Coverage](https://github.com/dnouri/aviation-anomaly/actions/workflows/ci.yml/badge.svg)](https://github.com/dnouri/aviation-anomaly/actions/workflows/ci.yml)
 [![Coverage](https://github.com/dnouri/aviation-anomaly/raw/coverage-data/badge.svg)](https://github.com/dnouri/aviation-anomaly/tree/coverage-data)
 [![Lint](https://github.com/dnouri/aviation-anomaly/actions/workflows/lint.yml/badge.svg)](https://github.com/dnouri/aviation-anomaly/actions/workflows/lint.yml)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
