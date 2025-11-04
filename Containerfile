@@ -44,5 +44,6 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 # Run FastAPI application with uvicorn
 # --host 0.0.0.0: bind to all interfaces (required for container networking)
 # --port 8000: application port
-# --workers 1: single worker (can increase based on CPU cores if needed)
-CMD ["uvicorn", "aviation_anomaly.api:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers: read X-Forwarded-For headers from reverse proxy (Caddy or nginx)
+# --forwarded-allow-ips '*': trust all proxy IPs (safe since bound to 127.0.0.1)
+CMD ["uvicorn", "aviation_anomaly.api:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
